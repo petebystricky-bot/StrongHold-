@@ -22,7 +22,7 @@ const detailCtx = detailCanvas.getContext("2d");
 const overviewCtx = overviewCanvas.getContext("2d");
 const infoDiv = document.getElementById("info");
 
-const PAGE_SIZE = 420;
+let PAGE_SIZE = 360;          // bude sa prepočítavať
 
 let viewWidth = 3;
 let viewHeight = 4;
@@ -33,7 +33,25 @@ let viewY = 0;
 let isDragging = false;
 let lastX = 0;
 let lastY = 0;
-let dragTarget = null; // "detail" alebo "overview"
+let dragTarget = null;
+
+// ======================
+// Výpočet veľkosti strán podľa šírky okna
+// ======================
+function updatePageSize() {
+  // Necháme malú rezervu na medzery a okraje
+  const available = window.innerWidth - 40;
+  PAGE_SIZE = Math.floor(available / 2);
+
+  // Minimálna a maximálna veľkosť
+  if (PAGE_SIZE < 260) PAGE_SIZE = 260;
+  if (PAGE_SIZE > 480) PAGE_SIZE = 480;
+
+  detailCanvas.width = PAGE_SIZE;
+  detailCanvas.height = PAGE_SIZE;
+  overviewCanvas.width = PAGE_SIZE;
+  overviewCanvas.height = PAGE_SIZE;
+}
 
 // ======================
 // Načítanie mapy
@@ -43,17 +61,14 @@ async function loadMap() {
     const response = await fetch("data/mapa.json");
     mapData = await response.json();
 
-    detailCanvas.width = PAGE_SIZE;
-    detailCanvas.height = PAGE_SIZE;
-    overviewCanvas.width = PAGE_SIZE;
-    overviewCanvas.height = PAGE_SIZE;
+    updatePageSize();
 
     viewX = mapData.width / 2 - viewWidth / 2;
     viewY = mapData.height / 2 - viewHeight / 2;
 
     clampView();
     drawAll();
-    console.log("Mapa načítaná");
+    console.log("Mapa načítaná, PAGE_SIZE =", PAGE_SIZE);
   } catch (error) {
     console.error(error);
     infoDiv.textContent = "Chyba pri načítaní mapy.";
@@ -86,7 +101,6 @@ function drawDetail() {
   const offsetX = (viewX - startX) * tileW;
   const offsetY = (viewY - startY) * tileH;
 
-  // Kreslíme o 1 dlaždicu viac, aby pri plynulom posune neboli diery
   for (let y = 0; y <= viewHeight; y++) {
     for (let x = 0; x <= viewWidth; x++) {
       const mapX = startX + x;
@@ -119,7 +133,6 @@ function drawOverview() {
   const scaleX = PAGE_SIZE / mapData.width;
   const scaleY = PAGE_SIZE / mapData.height;
 
-  // Celá mapa
   for (let y = 0; y < mapData.height; y++) {
     for (let x = 0; x < mapData.width; x++) {
       const tile = mapData.tiles[y][x];
@@ -128,7 +141,6 @@ function drawOverview() {
     }
   }
 
-  // Zelený rámček – plynulý posun (bez Math.floor)
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2.5;
   overviewCtx.strokeRect(
@@ -140,7 +152,7 @@ function drawOverview() {
 }
 
 // ======================
-// Spoločné funkcie ťahania
+// Ťahanie
 // ======================
 function startDrag(clientX, clientY, target) {
   isDragging = true;
@@ -160,8 +172,7 @@ function moveDrag(clientX, clientY) {
     const tileH = PAGE_SIZE / viewHeight;
     viewX -= dx / tileW;
     viewY -= dy / tileH;
-  } 
-  else if (dragTarget === "overview") {
+  } else if (dragTarget === "overview") {
     const scaleX = PAGE_SIZE / mapData.width;
     const scaleY = PAGE_SIZE / mapData.height;
     viewX -= dx / scaleX;
@@ -180,70 +191,60 @@ function endDrag() {
 }
 
 // ======================
-// ĽAVÁ strana – myš
+// Udalosti – ĽAVÁ
 // ======================
 detailCanvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   startDrag(e.clientX, e.clientY, "detail");
 });
-
-detailCanvas.addEventListener("mousemove", (e) => {
-  moveDrag(e.clientX, e.clientY);
-});
-
+detailCanvas.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
 detailCanvas.addEventListener("mouseup", endDrag);
 detailCanvas.addEventListener("mouseleave", endDrag);
 
-// ======================
-// ĽAVÁ strana – prst
-// ======================
 detailCanvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
   const t = e.touches[0];
   startDrag(t.clientX, t.clientY, "detail");
 }, { passive: false });
-
 detailCanvas.addEventListener("touchmove", (e) => {
   e.preventDefault();
   const t = e.touches[0];
   moveDrag(t.clientX, t.clientY);
 }, { passive: false });
-
 detailCanvas.addEventListener("touchend", endDrag);
 detailCanvas.addEventListener("touchcancel", endDrag);
 
 // ======================
-// PRAVÁ strana – myš
+// Udalosti – PRAVÁ
 // ======================
 overviewCanvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   startDrag(e.clientX, e.clientY, "overview");
 });
-
-overviewCanvas.addEventListener("mousemove", (e) => {
-  moveDrag(e.clientX, e.clientY);
-});
-
+overviewCanvas.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
 overviewCanvas.addEventListener("mouseup", endDrag);
 overviewCanvas.addEventListener("mouseleave", endDrag);
 
-// ======================
-// PRAVÁ strana – prst
-// ======================
 overviewCanvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
   const t = e.touches[0];
   startDrag(t.clientX, t.clientY, "overview");
 }, { passive: false });
-
 overviewCanvas.addEventListener("touchmove", (e) => {
   e.preventDefault();
   const t = e.touches[0];
   moveDrag(t.clientX, t.clientY);
 }, { passive: false });
-
 overviewCanvas.addEventListener("touchend", endDrag);
 overviewCanvas.addEventListener("touchcancel", endDrag);
+
+// ======================
+// Pri zmene veľkosti okna prepočítame veľkosť
+// ======================
+window.addEventListener("resize", () => {
+  updatePageSize();
+  drawAll();
+});
 
 // ======================
 // Spustenie
