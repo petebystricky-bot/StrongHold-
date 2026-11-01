@@ -1,33 +1,26 @@
 body {
-  margin: 0;
-  padding: 10px;
+  margin: 20px;
   font-family: Arial, sans-serif;
-  background: #111;
+  background: #1a1a1a;
   color: #eee;
-  overflow: hidden;
+  text-align: center;
 }
 
 h1 {
-  margin: 5px 0 8px 0;
-  font-size: 20px;
-  text-align: center;
+  margin-bottom: 15px;
+  font-size: 24px;
 }
 
 #gameCanvas {
-  border: 2px solid #444;
-  background: #0a0a0a;
+  border: 2px solid #555;
+  background: #111;
   display: block;
   margin: 0 auto;
-  cursor: grab;
-}
-
-#gameCanvas:active {
-  cursor: grabbing;
+  cursor: crosshair;
 }
 
 #info {
-  margin-top: 8px;
-  font-size: 15px;
-  text-align: center;
-  color: #aaa;
+  margin-top: 15px;
+  font-size: 16px;
+  color: #ccc;
 }
