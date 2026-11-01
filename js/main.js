@@ -22,18 +22,18 @@ const detailCtx = detailCanvas.getContext("2d");
 const overviewCtx = overviewCanvas.getContext("2d");
 const infoDiv = document.getElementById("info");
 
-// Veľkosť jednej strany knihy (v pixeloch)
+// Veľkosť jednej strany knihy
 const PAGE_SIZE = 420;
 
-// Detailný pohľad – koľko políčok zobrazujeme
-let viewWidth = 3;   // 3 políčka na šírku
-let viewHeight = 4;  // 4 políčka na výšku
+// Koľko políčok zobrazujeme v detaile
+let viewWidth = 3;
+let viewHeight = 4;
 
-// Pozícia detailného pohľadu (ľavý horný roh v súradniciach mapy)
+// Pozícia detailného pohľadu (vždy celé čísla!)
 let viewX = 0;
 let viewY = 0;
 
-// Ťahanie na ľavej strane
+// Ťahanie
 let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
@@ -46,15 +46,17 @@ async function loadMap() {
     const response = await fetch("data/mapa.json");
     mapData = await response.json();
 
-    // Nastavíme rovnakú veľkosť oboch canvasov
     detailCanvas.width = PAGE_SIZE;
     detailCanvas.height = PAGE_SIZE;
     overviewCanvas.width = PAGE_SIZE;
     overviewCanvas.height = PAGE_SIZE;
 
-    // Začíname približne v strede mapy
+    // Začíname približne v strede
     viewX = Math.floor(mapData.width / 2 - viewWidth / 2);
     viewY = Math.floor(mapData.height / 2 - viewHeight / 2);
+
+    // Bezpečnostné obmedzenie
+    clampView();
 
     drawAll();
     console.log("Mapa načítaná");
@@ -65,14 +67,21 @@ async function loadMap() {
 }
 
 // ======================
-// Vykreslenie oboch strán
+// Obmedzenie pohľadu, aby nevychádzal z mapy
+// ======================
+function clampView() {
+  viewX = Math.max(0, Math.min(mapData.width - viewWidth, Math.floor(viewX)));
+  viewY = Math.max(0, Math.min(mapData.height - viewHeight, Math.floor(viewY)));
+}
+
+// ======================
+// Vykreslenie
 // ======================
 function drawAll() {
   drawDetail();
   drawOverview();
 }
 
-// ----- Ľavá strana (detail) -----
 function drawDetail() {
   if (!mapData) return;
 
@@ -96,14 +105,13 @@ function drawDetail() {
       detailCtx.fillStyle = TERRAIN_COLORS[tile.terrain] || "#ff00ff";
       detailCtx.fillRect(x * tileW, y * tileH, tileW + 1, tileH + 1);
 
-      // Jemná mriežka
-      detailCtx.strokeStyle = "rgba(0,0,0,0.2)";
+      // Mriežka
+      detailCtx.strokeStyle = "rgba(0,0,0,0.25)";
       detailCtx.strokeRect(x * tileW, y * tileH, tileW, tileH);
     }
   }
 }
 
-// ----- Pravá strana (celá mapa + rámček) -----
 function drawOverview() {
   if (!mapData) return;
 
@@ -121,9 +129,9 @@ function drawOverview() {
     }
   }
 
-  // Zelený rámček = čo je práve vidieť na ľavej strane
+  // Zelený rámček
   overviewCtx.strokeStyle = "#22c55e";
-  overviewCtx.lineWidth = 2;
+  overviewCtx.lineWidth = 2.5;
   overviewCtx.strokeRect(
     viewX * scaleX,
     viewY * scaleY,
@@ -133,7 +141,7 @@ function drawOverview() {
 }
 
 // ======================
-// Ovládanie – ĽAVÁ strana (drag)
+// ĽAVÁ strana – ťahanie
 // ======================
 detailCanvas.addEventListener("mousedown", (e) => {
   isDragging = true;
@@ -150,13 +158,11 @@ detailCanvas.addEventListener("mousemove", (e) => {
   const tileW = PAGE_SIZE / viewWidth;
   const tileH = PAGE_SIZE / viewHeight;
 
-  // Posunieme pohľad (záporný smer, lebo ťaháme mapu)
+  // Posun (záporný, lebo ťaháme mapu)
   viewX -= dx / tileW;
   viewY -= dy / tileH;
 
-  // Obmedzenie, aby sme nevyhli von z mapy
-  viewX = Math.max(0, Math.min(mapData.width - viewWidth, viewX));
-  viewY = Math.max(0, Math.min(mapData.height - viewHeight, viewY));
+  clampView();          // ← dôležité! zaokrúhli a obmedzí
 
   lastMouseX = e.clientX;
   lastMouseY = e.clientY;
@@ -168,7 +174,7 @@ detailCanvas.addEventListener("mouseup", () => isDragging = false);
 detailCanvas.addEventListener("mouseleave", () => isDragging = false);
 
 // ======================
-// Ovládanie – PRAVÁ strana (klik)
+// PRAVÁ strana – klik
 // ======================
 overviewCanvas.addEventListener("click", (e) => {
   if (!mapData) return;
@@ -180,18 +186,15 @@ overviewCanvas.addEventListener("click", (e) => {
   const scaleX = PAGE_SIZE / mapData.width;
   const scaleY = PAGE_SIZE / mapData.height;
 
-  // Prepočet na súradnice mapy
+  // Kliknuté políčko
   const clickedX = mouseX / scaleX;
   const clickedY = mouseY / scaleY;
 
-  // Vycentrujeme detailný pohľad na kliknuté miesto
+  // Vycentrujeme pohľad
   viewX = clickedX - viewWidth / 2;
   viewY = clickedY - viewHeight / 2;
 
-  // Obmedzenie
-  viewX = Math.max(0, Math.min(mapData.width - viewWidth, viewX));
-  viewY = Math.max(0, Math.min(mapData.height - viewHeight, viewY));
-
+  clampView();
   drawAll();
 });
 
