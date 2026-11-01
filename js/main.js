@@ -119,6 +119,7 @@ function drawOverview() {
   const scaleX = PAGE_SIZE / mapData.width;
   const scaleY = PAGE_SIZE / mapData.height;
 
+  // Celá mapa
   for (let y = 0; y < mapData.height; y++) {
     for (let x = 0; x < mapData.width; x++) {
       const tile = mapData.tiles[y][x];
@@ -126,6 +127,17 @@ function drawOverview() {
       overviewCtx.fillRect(x * scaleX, y * scaleY, scaleX + 0.5, scaleY + 0.5);
     }
   }
+
+  // Zelený rámček – teraz používa presné (aj desatinné) hodnoty
+  overviewCtx.strokeStyle = "#22c55e";
+  overviewCtx.lineWidth = 2.5;
+  overviewCtx.strokeRect(
+    viewX * scaleX,
+    viewY * scaleY,
+    viewWidth * scaleX,
+    viewHeight * scaleY
+  );
+}
 
   const rx = Math.floor(viewX);
   const ry = Math.floor(viewY);
