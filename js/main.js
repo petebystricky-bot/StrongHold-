@@ -1,5 +1,5 @@
 // ======================
-// Nastavenie farieb terénu
+// Farby terénu
 // ======================
 const TERRAIN_COLORS = {
   snow:   "#e8eef4",
@@ -19,6 +19,19 @@ const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const infoDiv = document.getElementById("info");
 
+// Kamera
+let camera = {
+  x: 0,
+  y: 0,
+  zoom: 0.35          // začneme oddialení, aby bolo vidieť viac mapy
+};
+
+// Ovládanie myšou
+let isDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let hasMoved = false;   // aby sme rozlíšili klik od ťahania
+
 // ======================
 // Načítanie mapy
 // ======================
@@ -27,60 +40,140 @@ async function loadMap() {
     const response = await fetch("data/mapa.json");
     mapData = await response.json();
 
-    // Nastavíme veľkosť canvasu podľa mapy
-    canvas.width = mapData.width * mapData.tileSize;
-    canvas.height = mapData.height * mapData.tileSize;
-
-    drawMap();
-    console.log("Mapa úspešne načítaná!");
+    // Canvas bude veľký ako okno prehliadača (nie celá mapa)
+    resizeCanvas();
+    draw();
+    console.log("Mapa načítaná:", mapData.width, "×", mapData.height);
   } catch (error) {
     console.error("Chyba pri načítaní mapy:", error);
-    infoDiv.textContent = "Chyba: Nepodarilo sa načítať mapu. Skontroluj cestu k súboru.";
+    infoDiv.textContent = "Chyba: Nepodarilo sa načítať mapu.";
   }
 }
 
 // ======================
-// Vykreslenie mapy
+// Prispôsobenie veľkosti canvasu
 // ======================
-function drawMap() {
+function resizeCanvas() {
+  canvas.width = window.innerWidth - 40;
+  canvas.height = window.innerHeight - 120;
+}
+
+// ======================
+// Vykreslenie (len viditeľná časť)
+// ======================
+function draw() {
   if (!mapData) return;
 
-  const tileSize = mapData.tileSize;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  for (let y = 0; y < mapData.height; y++) {
-    for (let x = 0; x < mapData.width; x++) {
+  const tileSize = mapData.tileSize * camera.zoom;
+
+  // Vypočítame, ktoré políčka sú viditeľné
+  const startX = Math.max(0, Math.floor(-camera.x / tileSize));
+  const startY = Math.max(0, Math.floor(-camera.y / tileSize));
+  const endX = Math.min(mapData.width, Math.ceil((canvas.width - camera.x) / tileSize) + 1);
+  const endY = Math.min(mapData.height, Math.ceil((canvas.height - camera.y) / tileSize) + 1);
+
+  for (let y = startY; y < endY; y++) {
+    for (let x = startX; x < endX; x++) {
       const tile = mapData.tiles[y][x];
-      const color = TERRAIN_COLORS[tile.terrain] || "#ff00ff"; // ružová = neznámy terén
+      const color = TERRAIN_COLORS[tile.terrain] || "#ff00ff";
 
-      // Vyplníme dlaždicu farbou
+      const screenX = x * tileSize + camera.x;
+      const screenY = y * tileSize + camera.y;
+
       ctx.fillStyle = color;
-      ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
-
-      // Jemná mriežka (voliteľné)
-      ctx.strokeStyle = "rgba(0,0,0,0.15)";
-      ctx.strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+      ctx.fillRect(screenX, screenY, tileSize + 0.5, tileSize + 0.5);
     }
   }
 }
 
 // ======================
-// Kliknutie na mapu
+// Ovládanie myšou – posúvanie
 // ======================
-canvas.addEventListener("click", (e) => {
-  if (!mapData) return;
+canvas.addEventListener("mousedown", (e) => {
+  isDragging = true;
+  hasMoved = false;
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
+});
 
+canvas.addEventListener("mousemove", (e) => {
+  if (!isDragging) return;
+
+  const dx = e.clientX - lastMouseX;
+  const dy = e.clientY - lastMouseY;
+
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+    hasMoved = true;
+  }
+
+  camera.x += dx;
+  camera.y += dy;
+
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
+
+  draw();
+});
+
+canvas.addEventListener("mouseup", (e) => {
+  isDragging = false;
+
+  // Ak sme len klikli (neťahali), zobrazíme info
+  if (!hasMoved && mapData) {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const tileSize = mapData.tileSize * camera.zoom;
+    const tileX = Math.floor((mouseX - camera.x) / tileSize);
+    const tileY = Math.floor((mouseY - camera.y) / tileSize);
+
+    if (tileX >= 0 && tileX < mapData.width && tileY >= 0 && tileY < mapData.height) {
+      const tile = mapData.tiles[tileY][tileX];
+      infoDiv.textContent = `Políčko [${tileX}, ${tileY}] — Terén: ${tile.terrain} | Výška: ${tile.height}`;
+    }
+  }
+});
+
+canvas.addEventListener("mouseleave", () => {
+  isDragging = false;
+});
+
+// ======================
+// Zoom kolieskom myši
+// ======================
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+
+  const zoomSpeed = 0.1;
+  const oldZoom = camera.zoom;
+
+  if (e.deltaY < 0) {
+    camera.zoom = Math.min(2.0, camera.zoom + zoomSpeed); // priblíženie
+  } else {
+    camera.zoom = Math.max(0.15, camera.zoom - zoomSpeed); // oddialenie
+  }
+
+  // Zoom smerom k myši (aby to vyzeralo prirodzene)
   const rect = canvas.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
   const mouseY = e.clientY - rect.top;
 
-  const tileX = Math.floor(mouseX / mapData.tileSize);
-  const tileY = Math.floor(mouseY / mapData.tileSize);
+  const zoomFactor = camera.zoom / oldZoom;
+  camera.x = mouseX - (mouseX - camera.x) * zoomFactor;
+  camera.y = mouseY - (mouseY - camera.y) * zoomFactor;
 
-  // Kontrola, či sme klikli dovnútra mapy
-  if (tileX >= 0 && tileX < mapData.width && tileY >= 0 && tileY < mapData.height) {
-    const tile = mapData.tiles[tileY][tileX];
-    infoDiv.textContent = `Políčko [${tileX}, ${tileY}] — Terén: ${tile.terrain} | Výška: ${tile.height}`;
-  }
+  draw();
+}, { passive: false });
+
+// ======================
+// Zmena veľkosti okna
+// ======================
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  draw();
 });
 
 // ======================
