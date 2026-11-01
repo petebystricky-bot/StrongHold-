@@ -81,26 +81,35 @@ function drawDetail() {
 
   const tileW = PAGE_SIZE / viewWidth;
   const tileH = PAGE_SIZE / viewHeight;
+
+  // Celá časť + desatinná časť
   const startX = Math.floor(viewX);
   const startY = Math.floor(viewY);
+  const offsetX = (viewX - startX) * tileW;   // posun v pixeloch
+  const offsetY = (viewY - startY) * tileH;
 
-  for (let y = 0; y < viewHeight; y++) {
-    for (let x = 0; x < viewWidth; x++) {
+  // Kreslíme o 1 dlaždicu viac, aby pri posune neboli diery
+  for (let y = 0; y <= viewHeight; y++) {
+    for (let x = 0; x <= viewWidth; x++) {
       const mapX = startX + x;
       const mapY = startY + y;
 
+      const screenX = x * tileW - offsetX;
+      const screenY = y * tileH - offsetY;
+
       if (mapX < 0 || mapX >= mapData.width || mapY < 0 || mapY >= mapData.height) {
         detailCtx.fillStyle = "#111";
-        detailCtx.fillRect(x * tileW, y * tileH, tileW, tileH);
+        detailCtx.fillRect(screenX, screenY, tileW + 1, tileH + 1);
         continue;
       }
 
       const tile = mapData.tiles[mapY][mapX];
       detailCtx.fillStyle = TERRAIN_COLORS[tile.terrain] || "#ff00ff";
-      detailCtx.fillRect(x * tileW, y * tileH, tileW + 1, tileH + 1);
+      detailCtx.fillRect(screenX, screenY, tileW + 1, tileH + 1);
 
+      // Mriežka
       detailCtx.strokeStyle = "rgba(0,0,0,0.25)";
-      detailCtx.strokeRect(x * tileW, y * tileH, tileW, tileH);
+      detailCtx.strokeRect(screenX, screenY, tileW, tileH);
     }
   }
 }
