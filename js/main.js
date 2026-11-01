@@ -22,18 +22,15 @@ const detailCtx = detailCanvas.getContext("2d");
 const overviewCtx = overviewCanvas.getContext("2d");
 const infoDiv = document.getElementById("info");
 
-// Veľkosť jednej strany knihy
 const PAGE_SIZE = 420;
 
-// Koľko políčok zobrazujeme v detaile
 let viewWidth = 3;
 let viewHeight = 4;
 
-// Pozícia detailného pohľadu (vždy celé čísla!)
+// Pozícia pohľadu (môže byť desatinná počas ťahania)
 let viewX = 0;
 let viewY = 0;
 
-// Ťahanie
 let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
@@ -51,13 +48,10 @@ async function loadMap() {
     overviewCanvas.width = PAGE_SIZE;
     overviewCanvas.height = PAGE_SIZE;
 
-    // Začíname približne v strede
-    viewX = Math.floor(mapData.width / 2 - viewWidth / 2);
-    viewY = Math.floor(mapData.height / 2 - viewHeight / 2);
+    viewX = mapData.width / 2 - viewWidth / 2;
+    viewY = mapData.height / 2 - viewHeight / 2;
 
-    // Bezpečnostné obmedzenie
     clampView();
-
     drawAll();
     console.log("Mapa načítaná");
   } catch (error) {
@@ -67,11 +61,11 @@ async function loadMap() {
 }
 
 // ======================
-// Obmedzenie pohľadu, aby nevychádzal z mapy
+// Obmedzenie pohľadu
 // ======================
 function clampView() {
-  viewX = Math.max(0, Math.min(mapData.width - viewWidth, Math.floor(viewX)));
-  viewY = Math.max(0, Math.min(mapData.height - viewHeight, Math.floor(viewY)));
+  viewX = Math.max(0, Math.min(mapData.width - viewWidth, viewX));
+  viewY = Math.max(0, Math.min(mapData.height - viewHeight, viewY));
 }
 
 // ======================
@@ -90,10 +84,14 @@ function drawDetail() {
   const tileW = PAGE_SIZE / viewWidth;
   const tileH = PAGE_SIZE / viewHeight;
 
+  // Pri kreslení používame zaokrúhlené hodnoty
+  const startX = Math.floor(viewX);
+  const startY = Math.floor(viewY);
+
   for (let y = 0; y < viewHeight; y++) {
     for (let x = 0; x < viewWidth; x++) {
-      const mapX = viewX + x;
-      const mapY = viewY + y;
+      const mapX = startX + x;
+      const mapY = startY + y;
 
       if (mapX < 0 || mapX >= mapData.width || mapY < 0 || mapY >= mapData.height) {
         detailCtx.fillStyle = "#111";
@@ -105,7 +103,6 @@ function drawDetail() {
       detailCtx.fillStyle = TERRAIN_COLORS[tile.terrain] || "#ff00ff";
       detailCtx.fillRect(x * tileW, y * tileH, tileW + 1, tileH + 1);
 
-      // Mriežka
       detailCtx.strokeStyle = "rgba(0,0,0,0.25)";
       detailCtx.strokeRect(x * tileW, y * tileH, tileW, tileH);
     }
@@ -120,7 +117,6 @@ function drawOverview() {
   const scaleX = PAGE_SIZE / mapData.width;
   const scaleY = PAGE_SIZE / mapData.height;
 
-  // Celá mapa
   for (let y = 0; y < mapData.height; y++) {
     for (let x = 0; x < mapData.width; x++) {
       const tile = mapData.tiles[y][x];
@@ -129,74 +125,122 @@ function drawOverview() {
     }
   }
 
-  // Zelený rámček
+  // Rámček (používame zaokrúhlené hodnoty)
+  const rx = Math.floor(viewX);
+  const ry = Math.floor(viewY);
+
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2.5;
   overviewCtx.strokeRect(
-    viewX * scaleX,
-    viewY * scaleY,
+    rx * scaleX,
+    ry * scaleY,
     viewWidth * scaleX,
     viewHeight * scaleY
   );
 }
 
 // ======================
-// ĽAVÁ strana – ťahanie
+// Spoločná funkcia pre začiatok ťahania
 // ======================
-detailCanvas.addEventListener("mousedown", (e) => {
+function startDrag(clientX, clientY) {
   isDragging = true;
-  lastMouseX = e.clientX;
-  lastMouseY = e.clientY;
-});
+  lastMouseX = clientX;
+  lastMouseY = clientY;
+}
 
-detailCanvas.addEventListener("mousemove", (e) => {
+// ======================
+// Spoločná funkcia pre pohyb
+// ======================
+function moveDrag(clientX, clientY) {
   if (!isDragging || !mapData) return;
 
-  const dx = e.clientX - lastMouseX;
-  const dy = e.clientY - lastMouseY;
+  const dx = clientX - lastMouseX;
+  const dy = clientY - lastMouseY;
 
   const tileW = PAGE_SIZE / viewWidth;
   const tileH = PAGE_SIZE / viewHeight;
 
-  // Posun (záporný, lebo ťaháme mapu)
+  // Prirodzené ťahanie mapy (ako Google Maps)
   viewX -= dx / tileW;
   viewY -= dy / tileH;
 
-  clampView();          // ← dôležité! zaokrúhli a obmedzí
+  clampView();
 
-  lastMouseX = e.clientX;
-  lastMouseY = e.clientY;
+  lastMouseX = clientX;
+  lastMouseY = clientY;
 
   drawAll();
+}
+
+function endDrag() {
+  isDragging = false;
+}
+
+// ======================
+// MYŠ
+// ======================
+detailCanvas.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  startDrag(e.clientX, e.clientY);
 });
 
-detailCanvas.addEventListener("mouseup", () => isDragging = false);
-detailCanvas.addEventListener("mouseleave", () => isDragging = false);
+detailCanvas.addEventListener("mousemove", (e) => {
+  moveDrag(e.clientX, e.clientY);
+});
+
+detailCanvas.addEventListener("mouseup", endDrag);
+detailCanvas.addEventListener("mouseleave", endDrag);
 
 // ======================
-// PRAVÁ strana – klik
+// PRST (tablet / mobil)
 // ======================
-overviewCanvas.addEventListener("click", (e) => {
+detailCanvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  startDrag(touch.clientX, touch.clientY);
+}, { passive: false });
+
+detailCanvas.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  moveDrag(touch.clientX, touch.clientY);
+}, { passive: false });
+
+detailCanvas.addEventListener("touchend", endDrag);
+detailCanvas.addEventListener("touchcancel", endDrag);
+
+// ======================
+// PRAVÁ strana – klik (myš aj prst)
+// ======================
+function handleOverviewClick(clientX, clientY) {
   if (!mapData) return;
 
   const rect = overviewCanvas.getBoundingClientRect();
-  const mouseX = e.clientX - rect.left;
-  const mouseY = e.clientY - rect.top;
+  const mouseX = clientX - rect.left;
+  const mouseY = clientY - rect.top;
 
   const scaleX = PAGE_SIZE / mapData.width;
   const scaleY = PAGE_SIZE / mapData.height;
 
-  // Kliknuté políčko
   const clickedX = mouseX / scaleX;
   const clickedY = mouseY / scaleY;
 
-  // Vycentrujeme pohľad
   viewX = clickedX - viewWidth / 2;
   viewY = clickedY - viewHeight / 2;
 
   clampView();
   drawAll();
+}
+
+overviewCanvas.addEventListener("click", (e) => {
+  handleOverviewClick(e.clientX, e.clientY);
 });
+
+overviewCanvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  handleOverviewClick(touch.clientX, touch.clientY);
+}, { passive: false });
 
 // ======================
 // Spustenie
