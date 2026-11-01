@@ -128,25 +128,12 @@ function drawOverview() {
     }
   }
 
-  // Zelený rámček – teraz používa presné (aj desatinné) hodnoty
+  // Zelený rámček – plynulý posun (bez Math.floor)
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2.5;
   overviewCtx.strokeRect(
     viewX * scaleX,
     viewY * scaleY,
-    viewWidth * scaleX,
-    viewHeight * scaleY
-  );
-}
-
-  const rx = Math.floor(viewX);
-  const ry = Math.floor(viewY);
-
-  overviewCtx.strokeStyle = "#22c55e";
-  overviewCtx.lineWidth = 2.5;
-  overviewCtx.strokeRect(
-    rx * scaleX,
-    ry * scaleY,
     viewWidth * scaleX,
     viewHeight * scaleY
   );
