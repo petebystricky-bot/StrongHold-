@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8">
+  <title>Hrad - Knižné zobrazenie</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Westeros – Prototyp</h1>
+
+  <div class="controls">
+    <button id="btnFullscreen">Celá obrazovka</button>
+    <button id="btnToggleMinimap" style="display: none;">Skryť minimapu</button>
+  </div>
+
+  <div class="book" id="book">
+    <!-- Detail -->
+    <div class="page" id="detailPage">
+      <div class="page-title" id="detailTitle">Detail (3×4)</div>
+      <canvas id="detailCanvas"></canvas>
+    </div>
+
+    <!-- Prehľad / Minimap -->
+    <div class="page" id="overviewPage">
+      <div class="page-title" id="overviewTitle">Celá mapa</div>
+      <canvas id="overviewCanvas"></canvas>
+    </div>
+  </div>
+
+  <div id="info">
+    Ťahaj mapu myšou alebo prstom
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
