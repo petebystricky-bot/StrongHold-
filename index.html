@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8">
+  <title>Hrad - Knižné zobrazenie</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Westeros – Prototyp (knižné zobrazenie)</h1>
+
+  <div class="book">
+    <!-- Ľavá strana – detail -->
+    <div class="page">
+      <div class="page-title">Detail (3×4)</div>
+      <canvas id="detailCanvas"></canvas>
+    </div>
+
+    <!-- Pravá strana – celá mapa -->
+    <div class="page">
+      <div class="page-title">Celá mapa</div>
+      <canvas id="overviewCanvas"></canvas>
+    </div>
+  </div>
+
+  <div id="info">
+    Ľavá strana: ťahaj myšou • Pravá strana: klikni pre presun pohľadu
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
