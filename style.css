@@ -1,0 +1,26 @@
+body {
+  margin: 20px;
+  font-family: Arial, sans-serif;
+  background: #1a1a1a;
+  color: #eee;
+  text-align: center;
+}
+
+h1 {
+  margin-bottom: 15px;
+  font-size: 24px;
+}
+
+#gameCanvas {
+  border: 2px solid #555;
+  background: #111;
+  display: block;
+  margin: 0 auto;
+  cursor: crosshair;
+}
+
+#info {
+  margin-top: 15px;
+  font-size: 16px;
+  color: #ccc;
+}
