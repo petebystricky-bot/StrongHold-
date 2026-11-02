@@ -23,16 +23,13 @@ const overviewCtx = overviewCanvas.getContext("2d");
 const infoDiv = document.getElementById("info");
 const minimapContainer = document.getElementById("minimap-container");
 
-const btnMode = document.getElementById("btnMode");
-const btnMinimapSize = document.getElementById("btnMinimapSize");
-const btnToggleMinimap = document.getElementById("btnToggleMinimap");
+const btnA = document.getElementById("btnA");
+const btnB = document.getElementById("btnB");
+const btnC = document.getElementById("btnC");
 
-let isBookMode = false;          // false = fullscreen (základný), true = knižný režim
-let isMinimapVisible = true;
-let minimapScale = 0.18;         // približne 1:10 → 1:6 atď.
-
-let viewWidth = 4;               // minimálne 4
-let viewHeight = 3;              // minimálne 3
+let minimapMode = "a";          // a | b | c
+let viewWidth = 4;
+let viewHeight = 3;
 
 let viewX = 0;
 let viewY = 0;
@@ -43,69 +40,73 @@ let lastY = 0;
 let dragTarget = null;
 
 // ======================
-// Výpočet počtu políčok podľa pomeru strán canvasu
+// Výpočet počtu políčok (aby boli čo najviac štvorcové)
 // ======================
 function calculateViewSize() {
   const w = detailCanvas.width;
   const h = detailCanvas.height;
   const aspect = w / h;
 
-  // Minimálne 4×3
   let cols = 4;
   let rows = 3;
 
   if (aspect >= 1) {
-    // Širší obraz
     rows = 3;
     cols = Math.max(4, Math.round(rows * aspect));
   } else {
-    // Vyšší obraz
     cols = 3;
     rows = Math.max(4, Math.round(cols / aspect));
   }
 
-  // Jemné doladenie, aby políčka boli čo najviac štvorcové
+  // Jemné doladenie pomeru
   const tileAspect = (w / cols) / (h / rows);
-  if (tileAspect > 1.15) cols++;
-  if (tileAspect < 0.87) rows++;
+  if (tileAspect > 1.18) cols++;
+  if (tileAspect < 0.85) rows++;
 
   viewWidth = cols;
   viewHeight = rows;
 }
 
 // ======================
+// Nastavenie veľkosti minimapy podľa režimu a/b/c
+// ======================
+function updateMinimapSize() {
+  if (!mapData) return;
+
+  const mapAspect = mapData.width / mapData.height;
+  let miniW, miniH;
+
+  if (minimapMode === "a") {
+    // Malý štvorec – približne veľkosť jedného políčka na hlavnej mape
+    const tileSize = Math.min(detailCanvas.width / viewWidth, detailCanvas.height / viewHeight);
+    miniW = Math.max(70, Math.floor(tileSize * 1.1));
+    miniH = Math.floor(miniW / mapAspect);
+  } 
+  else if (minimapMode === "b") {
+    // Polovica obrazovky (ako knižný režim)
+    miniW = Math.floor(window.innerWidth * 0.42);
+    miniH = Math.floor(miniW / mapAspect);
+  } 
+  else {
+    // c = minimalizované – nechávame malú veľkosť, ale kontajner skryjeme
+    miniW = 80;
+    miniH = Math.floor(miniW / mapAspect);
+  }
+
+  overviewCanvas.width = miniW;
+  overviewCanvas.height = miniH;
+}
+
+// ======================
 // Veľkosti canvasov
 // ======================
 function updateCanvasSizes() {
-  if (isBookMode) {
-    // Knižný režim – dve rovnaké strany
-    const available = Math.min(window.innerWidth - 30, 900);
-    const size = Math.floor(available / 2);
+  // Hlavná mapa vždy na celú dostupnú plochu
+  detailCanvas.width = window.innerWidth;
+  detailCanvas.height = window.innerHeight - 42;  // odpočítame spodný panel
 
-    detailCanvas.width = size;
-    detailCanvas.height = size;
-    overviewCanvas.width = size;
-    overviewCanvas.height = size;
-
-    // V knižnom režime fixný pohľad 3×4
-    viewWidth = 3;
-    viewHeight = 4;
-  } else {
-    // Fullscreen režim
-    detailCanvas.width = window.innerWidth;
-    detailCanvas.height = window.innerHeight;
-
-    // Minimap
-    const mapAspect = mapData ? mapData.width / mapData.height : 1;
-    const miniW = Math.floor(window.innerWidth * minimapScale);
-    const miniH = Math.floor(miniW / mapAspect);
-
-    overviewCanvas.width = miniW;
-    overviewCanvas.height = miniH;
-
-    calculateViewSize();   // prispôsobí počet políčok
-  }
-
+  calculateViewSize();
+  updateMinimapSize();
   clampView();
 }
 
@@ -119,11 +120,13 @@ async function loadMap() {
 
     updateCanvasSizes();
 
-    viewX = mapData.width / 2 - viewWidth / 2;
-    viewY = mapData.height / 2 - viewHeight / 2;
+    // Vycentrujeme pohľad na stred mapy
+    viewX = (mapData.width - viewWidth) / 2;
+    viewY = (mapData.height - viewHeight) / 2;
 
     clampView();
     drawAll();
+    setActiveButton("a");
     console.log("Mapa načítaná");
   } catch (error) {
     console.error(error);
@@ -295,36 +298,31 @@ overviewCanvas.addEventListener("touchend", endDrag);
 overviewCanvas.addEventListener("touchcancel", endDrag);
 
 // ======================
-// Tlačidlá v minimape
+// Tlačidlá a / b / c
 // ======================
-btnMode.addEventListener("click", () => {
-  isBookMode = !isBookMode;
-  btnMode.textContent = isBookMode ? "1:1" : "1:1";
-  // (neskôr môžeme zmeniť symbol podľa režimu)
-  updateCanvasSizes();
-  drawAll();
-});
+function setActiveButton(mode) {
+  btnA.classList.toggle("active", mode === "a");
+  btnB.classList.toggle("active", mode === "b");
+  btnC.classList.toggle("active", mode === "c");
+}
 
-btnMinimapSize.addEventListener("click", () => {
-  // Prepína medzi niekoľkými veľkosťami minimapy
-  if (minimapScale < 0.15) minimapScale = 0.18;
-  else if (minimapScale < 0.22) minimapScale = 0.25;
-  else minimapScale = 0.13;
+function setMinimapMode(mode) {
+  minimapMode = mode;
+  setActiveButton(mode);
 
-  updateCanvasSizes();
-  drawAll();
-});
-
-btnToggleMinimap.addEventListener("click", () => {
-  isMinimapVisible = !isMinimapVisible;
-  if (isMinimapVisible) {
-    minimapContainer.classList.remove("hidden");
-    btnToggleMinimap.textContent = "_";
-  } else {
+  if (mode === "c") {
     minimapContainer.classList.add("hidden");
-    btnToggleMinimap.textContent = "□";
+  } else {
+    minimapContainer.classList.remove("hidden");
   }
-});
+
+  updateMinimapSize();
+  drawAll();
+}
+
+btnA.addEventListener("click", () => setMinimapMode("a"));
+btnB.addEventListener("click", () => setMinimapMode("b"));
+btnC.addEventListener("click", () => setMinimapMode("c"));
 
 // ======================
 // Resize
