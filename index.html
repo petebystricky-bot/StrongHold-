@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Hrad - Prototyp</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="fullscreen-mode">
+  <div id="game-container">
+    <!-- Hlavná (detailná) mapa -->
+    <canvas id="detailCanvas"></canvas>
+
+    <!-- Minimap + ovládanie -->
+    <div id="minimap-container">
+      <div id="minimap-controls">
+        <button id="btnMode" title="Prepnúť režim">1:1</button>
+        <button id="btnMinimapSize" title="Veľkosť minimapy">1:10</button>
+        <button id="btnToggleMinimap" title="Skryť/Zobraziť minimapu">_</button>
+      </div>
+      <canvas id="overviewCanvas"></canvas>
+    </div>
+  </div>
+
+  <div id="info">Ťahaj mapu • Symboly v minimape menia zobrazenie</div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
