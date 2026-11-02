@@ -1,0 +1,97 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #111;
+  color: #eee;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+#game-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Hlavná mapa */
+#detailCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #0a0a0a;
+  cursor: grab;
+  touch-action: none;
+}
+
+#detailCanvas:active {
+  cursor: grabbing;
+}
+
+/* Kontajner minimapy */
+#minimap-container {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: #1a1a1a;
+  border: 2px solid #555;
+  border-radius: 6px;
+  padding: 4px;
+  z-index: 20;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.6);
+}
+
+#minimap-container.hidden {
+  display: none;
+}
+
+/* Ovládacie tlačidlá v minimape */
+#minimap-controls {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+  justify-content: flex-end;
+}
+
+#minimap-controls button {
+  background: #333;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 3px;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  line-height: 1.2;
+  min-width: 28px;
+}
+
+#minimap-controls button:hover {
+  background: #444;
+  color: #fff;
+}
+
+#overviewCanvas {
+  display: block;
+  background: #111;
+  cursor: grab;
+  touch-action: none;
+}
+
+#info {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #bbb;
+  pointer-events: none;
+  z-index: 10;
+}
