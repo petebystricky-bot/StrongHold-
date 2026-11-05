@@ -38,6 +38,8 @@ let isDragging = false;
 let lastX = 0;
 let lastY = 0;
 let dragTarget = null;
+let dragStartX = 0;
+let dragStartY = 0;
 
 // ======================
 // Výpočet počtu políčok
@@ -67,26 +69,24 @@ function calculateViewSize() {
 }
 
 // ======================
-// Veľkosť minimapy (rovnaký pomer strán pri A aj B)
+// Veľkosť minimapy – vždy ŠTVOREC
 // ======================
 function updateMinimapSize() {
-  if (!mapData) return;
-
-  const mapAspect = mapData.width / mapData.height;
-  let miniW;
+  let size;
 
   if (minimapMode === "a") {
-    miniW = Math.floor(window.innerWidth * 0.16);   // malá
+    size = Math.floor(window.innerWidth * 0.16);   // malý štvorec
   } else if (minimapMode === "b") {
-    miniW = Math.floor(window.innerWidth * 0.38);   // väčšia (polovica-ish)
+    size = Math.floor(window.innerWidth * 0.36);   // väčší štvorec
   } else {
-    miniW = 80;
+    size = 70;
   }
 
-  const miniH = Math.floor(miniW / mapAspect);
+  // Minimálna a maximálna veľkosť
+  size = Math.max(70, Math.min(size, 420));
 
-  overviewCanvas.width = miniW;
-  overviewCanvas.height = miniH;
+  overviewCanvas.width = size;
+  overviewCanvas.height = size;   // ← vždy štvorec
 }
 
 // ======================
@@ -183,14 +183,21 @@ function drawOverview() {
   const h = overviewCanvas.height;
   overviewCtx.clearRect(0, 0, w, h);
 
-  const scaleX = w / mapData.width;
-  const scaleY = h / mapData.height;
+  // Pretože minimapa je štvorec, použijeme menší rozmer, aby sa celá mapa zmestila
+  const scale = Math.min(w / mapData.width, h / mapData.height);
+  const offsetX = (w - mapData.width * scale) / 2;
+  const offsetY = (h - mapData.height * scale) / 2;
 
   for (let y = 0; y < mapData.height; y++) {
     for (let x = 0; x < mapData.width; x++) {
       const tile = mapData.tiles[y][x];
       overviewCtx.fillStyle = TERRAIN_COLORS[tile.terrain] || "#ff00ff";
-      overviewCtx.fillRect(x * scaleX, y * scaleY, scaleX + 0.5, scaleY + 0.5);
+      overviewCtx.fillRect(
+        offsetX + x * scale,
+        offsetY + y * scale,
+        scale + 0.5,
+        scale + 0.5
+      );
     }
   }
 
@@ -198,10 +205,10 @@ function drawOverview() {
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2;
   overviewCtx.strokeRect(
-    viewX * scaleX,
-    viewY * scaleY,
-    viewWidth * scaleX,
-    viewHeight * scaleY
+    offsetX + viewX * scale,
+    offsetY + viewY * scale,
+    viewWidth * scale,
+    viewHeight * scale
   );
 }
 
@@ -212,6 +219,8 @@ function startDrag(clientX, clientY, target) {
   isDragging = true;
   lastX = clientX;
   lastY = clientY;
+  dragStartX = clientX;
+  dragStartY = clientY;
   dragTarget = target;
 }
 
@@ -227,10 +236,11 @@ function moveDrag(clientX, clientY) {
     viewX -= dx / tileW;
     viewY -= dy / tileH;
   } else if (dragTarget === "overview") {
-    const scaleX = overviewCanvas.width / mapData.width;
-    const scaleY = overviewCanvas.height / mapData.height;
-    viewX -= dx / scaleX;
-    viewY -= dy / scaleY;
+    const w = overviewCanvas.width;
+    const h = overviewCanvas.height;
+    const scale = Math.min(w / mapData.width, h / mapData.height);
+    viewX -= dx / scale;
+    viewY -= dy / scale;
   }
 
   clampView();
@@ -239,13 +249,21 @@ function moveDrag(clientX, clientY) {
   drawAll();
 }
 
-function endDrag() {
+function endDrag(clientX, clientY) {
+  // Ak sme sa takmer nepohli = bol to klik
+  if (dragTarget === "overview" && clientX !== undefined) {
+    const dist = Math.hypot(clientX - dragStartX, clientY - dragStartY);
+    if (dist < 6) {
+      handleMinimapClick(clientX, clientY);
+    }
+  }
+
   isDragging = false;
   dragTarget = null;
 }
 
 // ======================
-// Kliknutie na minimapu = presun pohľadu
+// Kliknutie na minimapu
 // ======================
 function handleMinimapClick(clientX, clientY) {
   if (!mapData || minimapMode === "c") return;
@@ -254,14 +272,17 @@ function handleMinimapClick(clientX, clientY) {
   const mouseX = clientX - rect.left;
   const mouseY = clientY - rect.top;
 
-  const scaleX = overviewCanvas.width / mapData.width;
-  const scaleY = overviewCanvas.height / mapData.height;
+  const w = overviewCanvas.width;
+  const h = overviewCanvas.height;
+  const scale = Math.min(w / mapData.width, h / mapData.height);
+  const offsetX = (w - mapData.width * scale) / 2;
+  const offsetY = (h - mapData.height * scale) / 2;
 
   // Prepočet na súradnice mapy
-  const mapClickX = mouseX / scaleX;
-  const mapClickY = mouseY / scaleY;
+  const mapClickX = (mouseX - offsetX) / scale;
+  const mapClickY = (mouseY - offsetY) / scale;
 
-  // Vycentrujeme pohľad na kliknuté miesto
+  // Vycentrujeme pohľad
   viewX = mapClickX - viewWidth / 2;
   viewY = mapClickY - viewHeight / 2;
 
@@ -277,8 +298,8 @@ detailCanvas.addEventListener("mousedown", e => {
   startDrag(e.clientX, e.clientY, "detail");
 });
 detailCanvas.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
-detailCanvas.addEventListener("mouseup", endDrag);
-detailCanvas.addEventListener("mouseleave", endDrag);
+detailCanvas.addEventListener("mouseup", e => endDrag(e.clientX, e.clientY));
+detailCanvas.addEventListener("mouseleave", () => endDrag());
 
 detailCanvas.addEventListener("touchstart", e => {
   e.preventDefault();
@@ -288,25 +309,25 @@ detailCanvas.addEventListener("touchmove", e => {
   e.preventDefault();
   moveDrag(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
-detailCanvas.addEventListener("touchend", endDrag);
-detailCanvas.addEventListener("touchcancel", endDrag);
+detailCanvas.addEventListener("touchend", e => {
+  if (e.changedTouches.length > 0) {
+    endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+  } else {
+    endDrag();
+  }
+});
+detailCanvas.addEventListener("touchcancel", () => endDrag());
 
 // ======================
-// Udalosti – Minimap (ťahanie + klik)
+// Udalosti – Minimap
 // ======================
 overviewCanvas.addEventListener("mousedown", e => {
   e.preventDefault();
   startDrag(e.clientX, e.clientY, "overview");
 });
 overviewCanvas.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
-overviewCanvas.addEventListener("mouseup", e => {
-  // Ak sme len klikli (neťahali), spravíme presun
-  if (!isDragging || (Math.abs(e.clientX - lastX) < 4 && Math.abs(e.clientY - lastY) < 4)) {
-    handleMinimapClick(e.clientX, e.clientY);
-  }
-  endDrag();
-});
-overviewCanvas.addEventListener("mouseleave", endDrag);
+overviewCanvas.addEventListener("mouseup", e => endDrag(e.clientX, e.clientY));
+overviewCanvas.addEventListener("mouseleave", () => endDrag());
 
 overviewCanvas.addEventListener("touchstart", e => {
   e.preventDefault();
@@ -317,14 +338,13 @@ overviewCanvas.addEventListener("touchmove", e => {
   moveDrag(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
 overviewCanvas.addEventListener("touchend", e => {
-  endDrag();
+  if (e.changedTouches.length > 0) {
+    endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+  } else {
+    endDrag();
+  }
 });
-overviewCanvas.addEventListener("touchcancel", endDrag);
-
-// Pre touch klik (jednoduché ťuknutie)
-overviewCanvas.addEventListener("click", e => {
-  handleMinimapClick(e.clientX, e.clientY);
-});
+overviewCanvas.addEventListener("touchcancel", () => endDrag());
 
 // ======================
 // Tlačidlá a / b / c
