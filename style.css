@@ -16,7 +16,7 @@ body {
 #game-container {
   position: relative;
   width: 100%;
-  height: calc(100% - 42px);   /* nechá miesto pre spodný panel */
+  height: calc(100% - 42px);
 }
 
 /* Hlavná mapa */
@@ -33,16 +33,24 @@ body {
   cursor: grabbing;
 }
 
-/* Minimap kontajner */
-#minimap-container {
+/* Wrapper minimapy + tlačidiel */
+#minimap-wrapper {
   position: absolute;
   right: 10px;
-  bottom: 10px;
+  bottom: 0;                    /* dotýka sa spodnej lišty */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  z-index: 20;
+}
+
+/* Samotná minimapa */
+#minimap-container {
   background: #1a1a1a;
   border: 2px solid #555;
   border-radius: 5px;
   padding: 3px;
-  z-index: 20;
   box-shadow: 0 4px 14px rgba(0,0,0,0.55);
   transition: opacity 0.2s, transform 0.2s;
 }
@@ -50,40 +58,30 @@ body {
 #minimap-container.hidden {
   opacity: 0;
   pointer-events: none;
-  transform: scale(0.8);
+  transform: scale(0.85);
 }
 
 #overviewCanvas {
   display: block;
   background: #111;
-  cursor: grab;
+  cursor: crosshair;
   touch-action: none;
 }
 
-/* Spodný panel */
-#bottom-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 42px;
-  background: #1c1c1c;
-  border-top: 1px solid #444;
+/* Tlačidlá a/b/c pod minimapou */
+#minimap-buttons {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  z-index: 30;
+  gap: 5px;
 }
 
 .mode-btn {
-  width: 36px;
-  height: 28px;
+  width: 32px;
+  height: 26px;
   background: #2a2a2a;
   color: #aaa;
   border: 1px solid #555;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: bold;
   cursor: pointer;
 }
@@ -97,6 +95,18 @@ body {
   background: #3b82f6;
   color: #fff;
   border-color: #60a5fa;
+}
+
+/* Spodná lišta */
+#bottom-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 42px;
+  background: #1c1c1c;
+  border-top: 1px solid #444;
+  z-index: 15;
 }
 
 #info {
