@@ -27,7 +27,7 @@ const btnA = document.getElementById("btnA");
 const btnB = document.getElementById("btnB");
 const btnC = document.getElementById("btnC");
 
-let minimapMode = "a";          // a | b | c
+let minimapMode = "a";
 let viewWidth = 4;
 let viewHeight = 3;
 
@@ -40,7 +40,7 @@ let lastY = 0;
 let dragTarget = null;
 
 // ======================
-// Výpočet počtu políčok (aby boli čo najviac štvorcové)
+// Výpočet počtu políčok
 // ======================
 function calculateViewSize() {
   const w = detailCanvas.width;
@@ -58,7 +58,6 @@ function calculateViewSize() {
     rows = Math.max(4, Math.round(cols / aspect));
   }
 
-  // Jemné doladenie pomeru
   const tileAspect = (w / cols) / (h / rows);
   if (tileAspect > 1.18) cols++;
   if (tileAspect < 0.85) rows++;
@@ -68,30 +67,23 @@ function calculateViewSize() {
 }
 
 // ======================
-// Nastavenie veľkosti minimapy podľa režimu a/b/c
+// Veľkosť minimapy (rovnaký pomer strán pri A aj B)
 // ======================
 function updateMinimapSize() {
   if (!mapData) return;
 
   const mapAspect = mapData.width / mapData.height;
-  let miniW, miniH;
+  let miniW;
 
   if (minimapMode === "a") {
-    // Malý štvorec – približne veľkosť jedného políčka na hlavnej mape
-    const tileSize = Math.min(detailCanvas.width / viewWidth, detailCanvas.height / viewHeight);
-    miniW = Math.max(70, Math.floor(tileSize * 1.1));
-    miniH = Math.floor(miniW / mapAspect);
-  } 
-  else if (minimapMode === "b") {
-    // Polovica obrazovky (ako knižný režim)
-    miniW = Math.floor(window.innerWidth * 0.42);
-    miniH = Math.floor(miniW / mapAspect);
-  } 
-  else {
-    // c = minimalizované – nechávame malú veľkosť, ale kontajner skryjeme
+    miniW = Math.floor(window.innerWidth * 0.16);   // malá
+  } else if (minimapMode === "b") {
+    miniW = Math.floor(window.innerWidth * 0.38);   // väčšia (polovica-ish)
+  } else {
     miniW = 80;
-    miniH = Math.floor(miniW / mapAspect);
   }
+
+  const miniH = Math.floor(miniW / mapAspect);
 
   overviewCanvas.width = miniW;
   overviewCanvas.height = miniH;
@@ -101,9 +93,8 @@ function updateMinimapSize() {
 // Veľkosti canvasov
 // ======================
 function updateCanvasSizes() {
-  // Hlavná mapa vždy na celú dostupnú plochu
   detailCanvas.width = window.innerWidth;
-  detailCanvas.height = window.innerHeight - 42;  // odpočítame spodný panel
+  detailCanvas.height = window.innerHeight - 42;
 
   calculateViewSize();
   updateMinimapSize();
@@ -120,7 +111,6 @@ async function loadMap() {
 
     updateCanvasSizes();
 
-    // Vycentrujeme pohľad na stred mapy
     viewX = (mapData.width - viewWidth) / 2;
     viewY = (mapData.height - viewHeight) / 2;
 
@@ -204,6 +194,7 @@ function drawOverview() {
     }
   }
 
+  // Zelený rámček
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2;
   overviewCtx.strokeRect(
@@ -254,6 +245,31 @@ function endDrag() {
 }
 
 // ======================
+// Kliknutie na minimapu = presun pohľadu
+// ======================
+function handleMinimapClick(clientX, clientY) {
+  if (!mapData || minimapMode === "c") return;
+
+  const rect = overviewCanvas.getBoundingClientRect();
+  const mouseX = clientX - rect.left;
+  const mouseY = clientY - rect.top;
+
+  const scaleX = overviewCanvas.width / mapData.width;
+  const scaleY = overviewCanvas.height / mapData.height;
+
+  // Prepočet na súradnice mapy
+  const mapClickX = mouseX / scaleX;
+  const mapClickY = mouseY / scaleY;
+
+  // Vycentrujeme pohľad na kliknuté miesto
+  viewX = mapClickX - viewWidth / 2;
+  viewY = mapClickY - viewHeight / 2;
+
+  clampView();
+  drawAll();
+}
+
+// ======================
 // Udalosti – Detail
 // ======================
 detailCanvas.addEventListener("mousedown", e => {
@@ -276,14 +292,20 @@ detailCanvas.addEventListener("touchend", endDrag);
 detailCanvas.addEventListener("touchcancel", endDrag);
 
 // ======================
-// Udalosti – Minimap
+// Udalosti – Minimap (ťahanie + klik)
 // ======================
 overviewCanvas.addEventListener("mousedown", e => {
   e.preventDefault();
   startDrag(e.clientX, e.clientY, "overview");
 });
 overviewCanvas.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
-overviewCanvas.addEventListener("mouseup", endDrag);
+overviewCanvas.addEventListener("mouseup", e => {
+  // Ak sme len klikli (neťahali), spravíme presun
+  if (!isDragging || (Math.abs(e.clientX - lastX) < 4 && Math.abs(e.clientY - lastY) < 4)) {
+    handleMinimapClick(e.clientX, e.clientY);
+  }
+  endDrag();
+});
 overviewCanvas.addEventListener("mouseleave", endDrag);
 
 overviewCanvas.addEventListener("touchstart", e => {
@@ -294,8 +316,15 @@ overviewCanvas.addEventListener("touchmove", e => {
   e.preventDefault();
   moveDrag(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
-overviewCanvas.addEventListener("touchend", endDrag);
+overviewCanvas.addEventListener("touchend", e => {
+  endDrag();
+});
 overviewCanvas.addEventListener("touchcancel", endDrag);
+
+// Pre touch klik (jednoduché ťuknutie)
+overviewCanvas.addEventListener("click", e => {
+  handleMinimapClick(e.clientX, e.clientY);
+});
 
 // ======================
 // Tlačidlá a / b / c
