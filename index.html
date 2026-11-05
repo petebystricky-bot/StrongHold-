@@ -11,20 +11,23 @@
     <!-- Hlavná mapa -->
     <canvas id="detailCanvas"></canvas>
 
-    <!-- Minimap -->
-    <div id="minimap-container">
-      <canvas id="overviewCanvas"></canvas>
+    <!-- Minimap + ovládanie -->
+    <div id="minimap-wrapper">
+      <div id="minimap-container">
+        <canvas id="overviewCanvas"></canvas>
+      </div>
+      <div id="minimap-buttons">
+        <button id="btnA" class="mode-btn active">a</button>
+        <button id="btnB" class="mode-btn">b</button>
+        <button id="btnC" class="mode-btn">c</button>
+      </div>
     </div>
   </div>
 
-  <!-- Spodný panel -->
-  <div id="bottom-bar">
-    <button id="btnA" class="mode-btn active" title="Štvorec">a</button>
-    <button id="btnB" class="mode-btn" title="Polovica obrazovky">b</button>
-    <button id="btnC" class="mode-btn" title="Minimalizovať">c</button>
-  </div>
+  <!-- Spodná lišta (zatiaľ prázdna, neskôr sem dáme ďalšie možnosti) -->
+  <div id="bottom-bar"></div>
 
-  <div id="info">Ťahaj mapu • a / b / c menia minimapu</div>
+  <div id="info">Ťahaj mapu • Klikni na minimapu pre presun • a/b/c menia veľkosť</div>
 
   <script src="js/main.js"></script>
 </body>
