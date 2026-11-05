@@ -8,24 +8,19 @@
 </head>
 <body>
   <div id="game-container">
-    <!-- Hlavná mapa -->
     <canvas id="detailCanvas"></canvas>
 
-    <!-- Minimap + ovládanie -->
-    <div id="minimap-wrapper">
-      <div id="minimap-container">
-        <canvas id="overviewCanvas"></canvas>
-      </div>
-      <div id="minimap-buttons">
-        <button id="btnA" class="mode-btn active">a</button>
-        <button id="btnB" class="mode-btn">b</button>
-        <button id="btnC" class="mode-btn">c</button>
-      </div>
+    <div id="minimap-container">
+      <canvas id="overviewCanvas"></canvas>
     </div>
   </div>
 
-  <!-- Spodná lišta (zatiaľ prázdna, neskôr sem dáme ďalšie možnosti) -->
-  <div id="bottom-bar"></div>
+  <!-- Spodná lišta -->
+  <div id="bottom-bar">
+    <button id="btnA" class="mode-btn active">a</button>
+    <button id="btnB" class="mode-btn">b</button>
+    <button id="btnC" class="mode-btn">c</button>
+  </div>
 
   <div id="info">Ťahaj mapu • Klikni na minimapu pre presun • a/b/c menia veľkosť</div>
 
