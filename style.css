@@ -19,7 +19,6 @@ body {
   height: calc(100% - 42px);
 }
 
-/* Hlavná mapa */
 #detailCanvas {
   display: block;
   width: 100%;
@@ -33,25 +32,17 @@ body {
   cursor: grabbing;
 }
 
-/* Wrapper minimapy + tlačidiel */
-#minimap-wrapper {
+/* Minimap */
+#minimap-container {
   position: absolute;
   right: 10px;
-  bottom: 0;                    /* dotýka sa spodnej lišty */
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  z-index: 20;
-}
-
-/* Samotná minimapa */
-#minimap-container {
+  bottom: 8px;
   background: #1a1a1a;
   border: 2px solid #555;
   border-radius: 5px;
   padding: 3px;
   box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+  z-index: 20;
   transition: opacity 0.2s, transform 0.2s;
 }
 
@@ -68,20 +59,30 @@ body {
   touch-action: none;
 }
 
-/* Tlačidlá a/b/c pod minimapou */
-#minimap-buttons {
+/* Spodná lišta */
+#bottom-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 42px;
+  background: #1c1c1c;
+  border-top: 1px solid #444;
   display: flex;
-  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 30;
 }
 
 .mode-btn {
-  width: 32px;
-  height: 26px;
+  width: 36px;
+  height: 28px;
   background: #2a2a2a;
   color: #aaa;
   border: 1px solid #555;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: bold;
   cursor: pointer;
 }
@@ -95,18 +96,6 @@ body {
   background: #3b82f6;
   color: #fff;
   border-color: #60a5fa;
-}
-
-/* Spodná lišta */
-#bottom-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 42px;
-  background: #1c1c1c;
-  border-top: 1px solid #444;
-  z-index: 15;
 }
 
 #info {
