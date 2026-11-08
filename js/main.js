@@ -1,6 +1,3 @@
-Tu máš kompletný aktuálny `js/main.js`:
-
-```js
 // ======================
 // Farby terénu
 // ======================
@@ -371,4 +368,3 @@ window.addEventListener("resize", () => {
 // Spustenie
 // ======================
 loadMap();
-```
