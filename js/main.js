@@ -26,8 +26,8 @@ let heightData = null;       // pôvodná 36 × 64
 let srcWidth = 36;
 let srcHeight = 64;
 
-// Pri vykresľovaní používame 2× jemnejšiu mriežku
-const SCALE = 2;
+// Pri vykresľovaní používame 4× jemnejšiu mriežku
+const SCALE = 4;
 let mapWidth = srcWidth * SCALE;   // 72
 let mapHeight = srcHeight * SCALE; // 128
 
