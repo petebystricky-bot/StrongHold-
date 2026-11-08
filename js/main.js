@@ -1,3 +1,6 @@
+Tu máš kompletný aktuálny `js/main.js`:
+
+```js
 // ======================
 // Farby terénu
 // ======================
@@ -70,17 +73,19 @@ function calculateViewSize() {
 function updateMinimapSize() {
   const value = Number(minimapSlider.value); // 0 až 100
 
-  // 0 = takmer skrytá, 100 = polovica šírky obrazovky
+  // Otočené: 0 = maximálna veľkosť, 100 = minimálna
+  const inverted = 100 - value;
+
   const minSize = 50;
   const maxSize = Math.floor(window.innerWidth * 0.48);
 
-  const size = Math.floor(minSize + (maxSize - minSize) * (value / 100));
+  const size = Math.floor(minSize + (maxSize - minSize) * (inverted / 100));
 
   overviewCanvas.width = size;
   overviewCanvas.height = size; // vždy štvorec
 
-  // Keď je posuvník úplne vľavo, minimapu skryjeme
-  if (value <= 2) {
+  // Keď je posuvník úplne vpravo, minimapu skryjeme
+  if (value >= 98) {
     minimapContainer.classList.add("hidden");
   } else {
     minimapContainer.classList.remove("hidden");
@@ -91,10 +96,15 @@ function updateMinimapSize() {
 // Veľkosti canvasov
 // ======================
 function updateCanvasSizes() {
-  const barHeight = window.innerHeight * 0.07; // 7 %
+  const bar = document.getElementById("bottom-bar");
+  const barHeight = bar.offsetHeight;
 
   detailCanvas.width = window.innerWidth;
   detailCanvas.height = window.innerHeight - barHeight;
+
+  // Vzdialenosť minimapy od lišty = 6px
+  const gap = 6;
+  minimapContainer.style.bottom = (barHeight + gap) + "px";
 
   calculateViewSize();
   updateMinimapSize();
@@ -361,3 +371,4 @@ window.addEventListener("resize", () => {
 // Spustenie
 // ======================
 loadMap();
+```
