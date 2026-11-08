@@ -4,17 +4,16 @@
 function heightToColor(height) {
   const t = Math.max(0, Math.min(1, height / 1500));
 
-  // plynulý prechod: modrá → zelená → hnedá → biela
-  if (t < 0.2) { // nízko / voda
+  if (t < 0.2) {
     const k = t / 0.2;
     return `rgb(${20 + k * 30}, ${60 + k * 70}, ${120 + k * 60})`;
-  } else if (t < 0.45) { // nížiny / tráva
+  } else if (t < 0.45) {
     const k = (t - 0.2) / 0.25;
     return `rgb(${50 + k * 50}, ${130 + k * 40}, ${60 - k * 20})`;
-  } else if (t < 0.7) { // svahy / skala
+  } else if (t < 0.7) {
     const k = (t - 0.45) / 0.25;
     return `rgb(${120 + k * 40}, ${100 - k * 20}, ${60 - k * 20})`;
-  } else { // vysoké hory / sneh
+  } else {
     const k = (t - 0.7) / 0.3;
     return `rgb(${160 + k * 95}, ${150 + k * 105}, ${140 + k * 115})`;
   }
@@ -23,9 +22,14 @@ function heightToColor(height) {
 // ======================
 // Premenné
 // ======================
-let heightData = null;       // 36 × 64
-let mapWidth = 36;           // v sub-tiles
-let mapHeight = 64;
+let heightData = null;       // pôvodná 36 × 64
+let srcWidth = 36;
+let srcHeight = 64;
+
+// Pri vykresľovaní používame 2× jemnejšiu mriežku
+const SCALE = 2;
+let mapWidth = srcWidth * SCALE;   // 72
+let mapHeight = srcHeight * SCALE; // 128
 
 const detailCanvas = document.getElementById("detailCanvas");
 const overviewCanvas = document.getElementById("overviewCanvas");
@@ -35,8 +39,8 @@ const infoDiv = document.getElementById("info");
 const minimapContainer = document.getElementById("minimap-container");
 const minimapSlider = document.getElementById("minimapSlider");
 
-let viewWidth = 12;          // koľko sub-tiles vidíme na šírku
-let viewHeight = 16;
+let viewWidth = 24;
+let viewHeight = 32;
 let viewX = 0;
 let viewY = 0;
 
@@ -46,6 +50,34 @@ let lastY = 0;
 let dragTarget = null;
 let dragStartX = 0;
 let dragStartY = 0;
+
+// ======================
+// Bilineárna interpolácia výšky
+// ======================
+function getInterpolatedHeight(x, y) {
+  // x, y sú v súradniciach jemnej mriežky (0 .. mapWidth)
+  // Prevedieme na súradnice pôvodnej heightmapy
+  const srcX = x / SCALE;
+  const srcY = y / SCALE;
+
+  const x0 = Math.floor(srcX);
+  const y0 = Math.floor(srcY);
+  const x1 = Math.min(x0 + 1, srcWidth - 1);
+  const y1 = Math.min(y0 + 1, srcHeight - 1);
+
+  const fx = srcX - x0;
+  const fy = srcY - y0;
+
+  const h00 = heightData[y0][x0];
+  const h10 = heightData[y0][x1];
+  const h01 = heightData[y1][x0];
+  const h11 = heightData[y1][x1];
+
+  // Bilineárna interpolácia
+  const h0 = h00 * (1 - fx) + h10 * fx;
+  const h1 = h01 * (1 - fx) + h11 * fx;
+  return h0 * (1 - fy) + h1 * fy;
+}
 
 // ======================
 // Načítanie heightmapy
@@ -77,8 +109,11 @@ function loadHeightmap() {
         heights.push(row);
       }
 
-      mapWidth = img.width;
-      mapHeight = img.height;
+      srcWidth = img.width;
+      srcHeight = img.height;
+      mapWidth = srcWidth * SCALE;
+      mapHeight = srcHeight * SCALE;
+
       resolve(heights);
     };
 
@@ -88,26 +123,24 @@ function loadHeightmap() {
 }
 
 // ======================
-// Počet viditeľných sub-tiles
+// Počet viditeľných dielikov
 // ======================
 function calculateViewSize() {
   const w = detailCanvas.width;
   const h = detailCanvas.height;
   const aspect = w / h;
 
-  // Základný počet sub-tiles na obrazovke
-  let cols = 12;
-  let rows = 16;
+  let cols = 24;
+  let rows = 32;
 
   if (aspect >= 1) {
-    rows = 12;
-    cols = Math.max(12, Math.round(rows * aspect));
+    rows = 24;
+    cols = Math.max(24, Math.round(rows * aspect));
   } else {
-    cols = 12;
-    rows = Math.max(12, Math.round(cols / aspect));
+    cols = 24;
+    rows = Math.max(24, Math.round(cols / aspect));
   }
 
-  // Obmedzenie, aby sme nevideli viac než celú mapu
   cols = Math.min(cols, mapWidth);
   rows = Math.min(rows, mapHeight);
 
@@ -176,7 +209,7 @@ async function loadAll() {
     clampView();
     drawAll();
 
-    if (infoDiv) infoDiv.textContent = `Heightmapa \( {mapWidth}× \){mapHeight} načítaná`;
+    if (infoDiv) infoDiv.textContent = `Plynulý terén \( {mapWidth}× \){mapHeight} (interpolácia)`;
   } catch (err) {
     console.error(err);
     if (infoDiv) infoDiv.textContent = "Chyba pri načítaní heightmapy";
@@ -184,7 +217,7 @@ async function loadAll() {
 }
 
 // ======================
-// Vykreslenie – teraz po sub-tiles
+// Vykreslenie
 // ======================
 function drawAll() {
   drawDetail();
@@ -219,7 +252,7 @@ function drawDetail() {
         continue;
       }
 
-      const height = heightData[mapY][mapX];
+      const height = getInterpolatedHeight(mapX, mapY);
       detailCtx.fillStyle = heightToColor(height);
       detailCtx.fillRect(screenX, screenY, tileW + 1, tileH + 1);
     }
@@ -233,25 +266,26 @@ function drawOverview() {
   const h = overviewCanvas.height;
   overviewCtx.clearRect(0, 0, w, h);
 
-  const scaleX = w / mapWidth;
-  const scaleY = h / mapHeight;
+  // Na minimape kreslíme pôvodné rozlíšenie (rýchlejšie)
+  const scaleX = w / srcWidth;
+  const scaleY = h / srcHeight;
 
-  for (let y = 0; y < mapHeight; y++) {
-    for (let x = 0; x < mapWidth; x++) {
+  for (let y = 0; y < srcHeight; y++) {
+    for (let x = 0; x < srcWidth; x++) {
       const height = heightData[y][x];
       overviewCtx.fillStyle = heightToColor(height);
       overviewCtx.fillRect(x * scaleX, y * scaleY, scaleX + 0.5, scaleY + 0.5);
     }
   }
 
-  // Zelený rámček
+  // Zelený rámček (prepočítaný na pôvodné súradnice)
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2;
   overviewCtx.strokeRect(
-    viewX * scaleX,
-    viewY * scaleY,
-    viewWidth * scaleX,
-    viewHeight * scaleY
+    (viewX / SCALE) * scaleX,
+    (viewY / SCALE) * scaleY,
+    (viewWidth / SCALE) * scaleX,
+    (viewHeight / SCALE) * scaleY
   );
 }
 
@@ -279,10 +313,10 @@ function moveDrag(clientX, clientY) {
     viewX -= dx / tileW;
     viewY -= dy / tileH;
   } else if (dragTarget === "overview") {
-    const scaleX = overviewCanvas.width / mapWidth;
-    const scaleY = overviewCanvas.height / mapHeight;
-    viewX -= dx / scaleX;
-    viewY -= dy / scaleY;
+    const scaleX = overviewCanvas.width / srcWidth;
+    const scaleY = overviewCanvas.height / srcHeight;
+    viewX -= (dx / scaleX) * SCALE;
+    viewY -= (dy / scaleY) * SCALE;
   }
 
   clampView();
@@ -307,11 +341,11 @@ function handleMinimapClick(clientX, clientY) {
   const mouseX = clientX - rect.left;
   const mouseY = clientY - rect.top;
 
-  const scaleX = overviewCanvas.width / mapWidth;
-  const scaleY = overviewCanvas.height / mapHeight;
+  const scaleX = overviewCanvas.width / srcWidth;
+  const scaleY = overviewCanvas.height / srcHeight;
 
-  viewX = mouseX / scaleX - viewWidth / 2;
-  viewY = mouseY / scaleY - viewHeight / 2;
+  viewX = (mouseX / scaleX) * SCALE - viewWidth / 2;
+  viewY = (mouseY / scaleY) * SCALE - viewHeight / 2;
 
   clampView();
   drawAll();
