@@ -91,8 +91,11 @@ function updateMinimapSize() {
 // Veľkosti canvasov
 // ======================
 function updateCanvasSizes() {
+  // 7 % výšky obrazovky (rovnaká hodnota ako v CSS)
+  const barHeight = window.innerHeight * 0.07;
+
   detailCanvas.width = window.innerWidth;
-  detailCanvas.height = window.innerHeight - 48;
+  detailCanvas.height = window.innerHeight - barHeight;
 
   calculateViewSize();
   updateMinimapSize();
