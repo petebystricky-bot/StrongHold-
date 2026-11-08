@@ -130,15 +130,16 @@ function calculateViewSize() {
   const h = detailCanvas.height;
   const aspect = w / h;
 
-  let cols = 24;
-  let rows = 32;
+  // Pri SCALE = 4 chceme vidieť približne toľko „logických“ sub-tiles ako predtým
+  let cols = 48;
+  let rows = 64;
 
   if (aspect >= 1) {
-    rows = 24;
-    cols = Math.max(24, Math.round(rows * aspect));
+    rows = 48;
+    cols = Math.max(48, Math.round(rows * aspect));
   } else {
-    cols = 24;
-    rows = Math.max(24, Math.round(cols / aspect));
+    cols = 48;
+    rows = Math.max(48, Math.round(cols / aspect));
   }
 
   cols = Math.min(cols, mapWidth);
