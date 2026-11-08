@@ -16,7 +16,7 @@ body {
 #game-container {
   position: relative;
   width: 100%;
-  height: calc(100% - 42px);
+  height: calc(100% - 48px);   /* miesto pre spodnú lištu */
 }
 
 #detailCanvas {
@@ -32,11 +32,11 @@ body {
   cursor: grabbing;
 }
 
-/* Minimap */
+/* Minimap – sedí nad lištou */
 #minimap-container {
   position: absolute;
-  right: 10px;
-  bottom: 8px;
+  right: 12px;
+  bottom: 12px;                /* odstup od spodnej lišty */
   background: #1a1a1a;
   border: 2px solid #555;
   border-radius: 5px;
@@ -49,7 +49,7 @@ body {
 #minimap-container.hidden {
   opacity: 0;
   pointer-events: none;
-  transform: scale(0.85);
+  transform: scale(0.7);
 }
 
 #overviewCanvas {
@@ -65,37 +65,52 @@ body {
   bottom: 0;
   left: 0;
   width: 100%;
-  height: 42px;
+  height: 48px;
   background: #1c1c1c;
   border-top: 1px solid #444;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 14px;
   z-index: 30;
+  padding: 0 20px;
 }
 
-.mode-btn {
-  width: 36px;
-  height: 28px;
-  background: #2a2a2a;
+.slider-label {
+  font-size: 13px;
   color: #aaa;
-  border: 1px solid #555;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: bold;
+  min-width: 60px;
+}
+
+#minimapSlider {
+  width: 220px;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #444;
+  border-radius: 3px;
+  outline: none;
   cursor: pointer;
 }
 
-.mode-btn:hover {
-  background: #3a3a3a;
-  color: #fff;
+#minimapSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
 }
 
-.mode-btn.active {
+#minimapSlider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
   background: #3b82f6;
-  color: #fff;
-  border-color: #60a5fa;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
 }
 
 #info {
