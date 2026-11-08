@@ -22,12 +22,8 @@ const detailCtx = detailCanvas.getContext("2d");
 const overviewCtx = overviewCanvas.getContext("2d");
 const infoDiv = document.getElementById("info");
 const minimapContainer = document.getElementById("minimap-container");
+const minimapSlider = document.getElementById("minimapSlider");
 
-const btnA = document.getElementById("btnA");
-const btnB = document.getElementById("btnB");
-const btnC = document.getElementById("btnC");
-
-let minimapMode = "a";
 let viewWidth = 4;
 let viewHeight = 3;
 
@@ -69,24 +65,26 @@ function calculateViewSize() {
 }
 
 // ======================
-// Veľkosť minimapy – vždy ŠTVOREC
+// Veľkosť minimapy podľa posuvníka (0–100)
 // ======================
 function updateMinimapSize() {
-  let size;
+  const value = Number(minimapSlider.value); // 0 až 100
 
-  if (minimapMode === "a") {
-    size = Math.floor(window.innerWidth * 0.16);   // malý štvorec
-  } else if (minimapMode === "b") {
-    size = Math.floor(window.innerWidth * 0.36);   // väčší štvorec
-  } else {
-    size = 70;
-  }
+  // 0 = takmer skrytá, 100 = polovica šírky obrazovky
+  const minSize = 50;
+  const maxSize = Math.floor(window.innerWidth * 0.48);
 
-  // Minimálna a maximálna veľkosť
-  size = Math.max(70, Math.min(size, 420));
+  const size = Math.floor(minSize + (maxSize - minSize) * (value / 100));
 
   overviewCanvas.width = size;
-  overviewCanvas.height = size;   // ← vždy štvorec
+  overviewCanvas.height = size; // vždy štvorec
+
+  // Keď je posuvník úplne vľavo, minimapu skryjeme
+  if (value <= 2) {
+    minimapContainer.classList.add("hidden");
+  } else {
+    minimapContainer.classList.remove("hidden");
+  }
 }
 
 // ======================
@@ -94,7 +92,7 @@ function updateMinimapSize() {
 // ======================
 function updateCanvasSizes() {
   detailCanvas.width = window.innerWidth;
-  detailCanvas.height = window.innerHeight - 42;
+  detailCanvas.height = window.innerHeight - 48;
 
   calculateViewSize();
   updateMinimapSize();
@@ -116,7 +114,6 @@ async function loadMap() {
 
     clampView();
     drawAll();
-    setActiveButton("a");
     console.log("Mapa načítaná");
   } catch (error) {
     console.error(error);
@@ -183,7 +180,6 @@ function drawOverview() {
   const h = overviewCanvas.height;
   overviewCtx.clearRect(0, 0, w, h);
 
-  // Pretože minimapa je štvorec, použijeme menší rozmer, aby sa celá mapa zmestila
   const scale = Math.min(w / mapData.width, h / mapData.height);
   const offsetX = (w - mapData.width * scale) / 2;
   const offsetY = (h - mapData.height * scale) / 2;
@@ -250,7 +246,6 @@ function moveDrag(clientX, clientY) {
 }
 
 function endDrag(clientX, clientY) {
-  // Ak sme sa takmer nepohli = bol to klik
   if (dragTarget === "overview" && clientX !== undefined) {
     const dist = Math.hypot(clientX - dragStartX, clientY - dragStartY);
     if (dist < 6) {
@@ -266,7 +261,7 @@ function endDrag(clientX, clientY) {
 // Kliknutie na minimapu
 // ======================
 function handleMinimapClick(clientX, clientY) {
-  if (!mapData || minimapMode === "c") return;
+  if (!mapData) return;
 
   const rect = overviewCanvas.getBoundingClientRect();
   const mouseX = clientX - rect.left;
@@ -278,11 +273,9 @@ function handleMinimapClick(clientX, clientY) {
   const offsetX = (w - mapData.width * scale) / 2;
   const offsetY = (h - mapData.height * scale) / 2;
 
-  // Prepočet na súradnice mapy
   const mapClickX = (mouseX - offsetX) / scale;
   const mapClickY = (mouseY - offsetY) / scale;
 
-  // Vycentrujeme pohľad
   viewX = mapClickX - viewWidth / 2;
   viewY = mapClickY - viewHeight / 2;
 
@@ -347,31 +340,12 @@ overviewCanvas.addEventListener("touchend", e => {
 overviewCanvas.addEventListener("touchcancel", () => endDrag());
 
 // ======================
-// Tlačidlá a / b / c
+// Posuvník minimapy
 // ======================
-function setActiveButton(mode) {
-  btnA.classList.toggle("active", mode === "a");
-  btnB.classList.toggle("active", mode === "b");
-  btnC.classList.toggle("active", mode === "c");
-}
-
-function setMinimapMode(mode) {
-  minimapMode = mode;
-  setActiveButton(mode);
-
-  if (mode === "c") {
-    minimapContainer.classList.add("hidden");
-  } else {
-    minimapContainer.classList.remove("hidden");
-  }
-
+minimapSlider.addEventListener("input", () => {
   updateMinimapSize();
   drawAll();
-}
-
-btnA.addEventListener("click", () => setMinimapMode("a"));
-btnB.addEventListener("click", () => setMinimapMode("b"));
-btnC.addEventListener("click", () => setMinimapMode("c"));
+});
 
 // ======================
 // Resize
