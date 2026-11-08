@@ -1,0 +1,132 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #111;
+  color: #eee;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Výška lišty – 7 % */
+:root {
+  --bar-height: 7vh;
+}
+
+#game-container {
+  position: relative;
+  width: 100%;
+  height: calc(100% - var(--bar-height));
+}
+
+#detailCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #0a0a0a;
+  cursor: grab;
+  touch-action: none;
+}
+
+#detailCanvas:active {
+  cursor: grabbing;
+}
+
+/* ===== MINIMAP ===== */
+#minimap-container {
+  position: fixed;
+  right: 12px;
+  bottom: calc(7vh + 12px);   /* presne výška lišty + 12px */
+  background: #1a1a1a;
+  border: 2px solid #555;
+  border-radius: 5px;
+  padding: 3px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+  z-index: 25;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+#minimap-container.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.7);
+}
+
+#overviewCanvas {
+  display: block;
+  background: #111;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* ===== SPODNÁ LIŠTA ===== */
+#bottom-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 7vh;
+  background: #1c1c1c;
+  border-top: 1px solid #444;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 16px;
+  gap: 12px;
+  z-index: 30;
+}
+
+.slider-label {
+  font-size: 13px;
+  color: #aaa;
+}
+
+#minimapSlider {
+  width: 180px;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #444;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+#minimapSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
+}
+
+#minimapSlider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
+}
+
+#info {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.55);
+  padding: 3px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #bbb;
+  pointer-events: none;
+  z-index: 10;
+}
