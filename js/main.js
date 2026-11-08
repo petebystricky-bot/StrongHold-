@@ -1,37 +1,31 @@
 // ======================
-// Farby podľa výšky
+// Farby podľa výšky (0–1500 m)
 // ======================
 function heightToColor(height) {
-  // 0 m → tmavomodrá (voda/nížina)
-  // 500 m → zelená
-  // 1000 m → hnedá
-  // 1500 m → biela (sneh)
   const t = Math.max(0, Math.min(1, height / 1500));
 
-  if (t < 0.25) {
-    // nízke polohy – modrozelená
-    const k = t / 0.25;
-    return `rgb(${30 + k * 40}, ${90 + k * 80}, ${140 + k * 40})`;
-  } else if (t < 0.5) {
-    // stredné – zelená
-    const k = (t - 0.25) / 0.25;
-    return `rgb(${70 + k * 60}, ${170 - k * 40}, ${80 - k * 30})`;
-  } else if (t < 0.75) {
-    // vyššie – hnedá / skala
-    const k = (t - 0.5) / 0.25;
-    return `rgb(${130 + k * 50}, ${110 - k * 30}, ${70 - k * 20})`;
-  } else {
-    // najvyššie – sneh
-    const k = (t - 0.75) / 0.25;
-    return `rgb(${180 + k * 75}, ${170 + k * 85}, ${160 + k * 95})`;
+  // plynulý prechod: modrá → zelená → hnedá → biela
+  if (t < 0.2) { // nízko / voda
+    const k = t / 0.2;
+    return `rgb(${20 + k * 30}, ${60 + k * 70}, ${120 + k * 60})`;
+  } else if (t < 0.45) { // nížiny / tráva
+    const k = (t - 0.2) / 0.25;
+    return `rgb(${50 + k * 50}, ${130 + k * 40}, ${60 - k * 20})`;
+  } else if (t < 0.7) { // svahy / skala
+    const k = (t - 0.45) / 0.25;
+    return `rgb(${120 + k * 40}, ${100 - k * 20}, ${60 - k * 20})`;
+  } else { // vysoké hory / sneh
+    const k = (t - 0.7) / 0.3;
+    return `rgb(${160 + k * 95}, ${150 + k * 105}, ${140 + k * 115})`;
   }
 }
 
 // ======================
 // Premenné
 // ======================
-let mapData = null;          // pôvodná mapa (chunky)
-let heightData = null;       // 36×64 výšky
+let heightData = null;       // 36 × 64
+let mapWidth = 36;           // v sub-tiles
+let mapHeight = 64;
 
 const detailCanvas = document.getElementById("detailCanvas");
 const overviewCanvas = document.getElementById("overviewCanvas");
@@ -41,8 +35,8 @@ const infoDiv = document.getElementById("info");
 const minimapContainer = document.getElementById("minimap-container");
 const minimapSlider = document.getElementById("minimapSlider");
 
-let viewWidth = 4;
-let viewHeight = 3;
+let viewWidth = 12;          // koľko sub-tiles vidíme na šírku
+let viewHeight = 16;
 let viewX = 0;
 let viewY = 0;
 
@@ -53,10 +47,6 @@ let dragTarget = null;
 let dragStartX = 0;
 let dragStartY = 0;
 
-// Počet sub-tiles v jednom chunku
-const SUB_W = 3;
-const SUB_H = 4;
-
 // ======================
 // Načítanie heightmapy
 // ======================
@@ -66,10 +56,10 @@ function loadHeightmap() {
     img.crossOrigin = "Anonymous";
 
     img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const ctx = c.getContext("2d");
       ctx.drawImage(img, 0, 0);
 
       const imageData = ctx.getImageData(0, 0, img.width, img.height);
@@ -80,12 +70,15 @@ function loadHeightmap() {
         const row = [];
         for (let x = 0; x < img.width; x++) {
           const i = (y * img.width + x) * 4;
-          const brightness = data[i]; // 0–255
+          const brightness = data[i];
           const height = (brightness / 255) * 1500;
           row.push(height);
         }
         heights.push(row);
       }
+
+      mapWidth = img.width;
+      mapHeight = img.height;
       resolve(heights);
     };
 
@@ -95,34 +88,35 @@ function loadHeightmap() {
 }
 
 // ======================
-// Výpočet počtu chunkov na obrazovke
+// Počet viditeľných sub-tiles
 // ======================
 function calculateViewSize() {
   const w = detailCanvas.width;
   const h = detailCanvas.height;
   const aspect = w / h;
 
-  let cols = 4;
-  let rows = 3;
+  // Základný počet sub-tiles na obrazovke
+  let cols = 12;
+  let rows = 16;
 
   if (aspect >= 1) {
-    rows = 3;
-    cols = Math.max(4, Math.round(rows * aspect));
+    rows = 12;
+    cols = Math.max(12, Math.round(rows * aspect));
   } else {
-    cols = 3;
-    rows = Math.max(4, Math.round(cols / aspect));
+    cols = 12;
+    rows = Math.max(12, Math.round(cols / aspect));
   }
 
-  const tileAspect = (w / cols) / (h / rows);
-  if (tileAspect > 1.18) cols++;
-  if (tileAspect < 0.85) rows++;
+  // Obmedzenie, aby sme nevideli viac než celú mapu
+  cols = Math.min(cols, mapWidth);
+  rows = Math.min(rows, mapHeight);
 
   viewWidth = cols;
   viewHeight = rows;
 }
 
 // ======================
-// Veľkosť minimapy
+// Minimap veľkosť
 // ======================
 function updateMinimapSize() {
   const value = Number(minimapSlider.value);
@@ -143,7 +137,7 @@ function updateMinimapSize() {
 }
 
 // ======================
-// Veľkosti canvasov
+// Canvas sizes
 // ======================
 function updateCanvasSizes() {
   const bar = document.getElementById("bottom-bar");
@@ -162,76 +156,35 @@ function updateCanvasSizes() {
   clampView();
 }
 
+function clampView() {
+  viewX = Math.max(0, Math.min(mapWidth - viewWidth, viewX));
+  viewY = Math.max(0, Math.min(mapHeight - viewHeight, viewY));
+}
+
 // ======================
-// Načítanie všetkého
+// Načítanie
 // ======================
 async function loadAll() {
   try {
-    // 1. Heightmapa
     heightData = await loadHeightmap();
-    console.log("Heightmapa načítaná:", heightData[0].length, "×", heightData.length);
-
-    // 2. Pôvodná mapa (chunky) – ak existuje
-    try {
-      const response = await fetch("data/mapa.json");
-      mapData = await response.json();
-    } catch (e) {
-      // Ak mapa.json nie je, vytvoríme prázdnu štruktúru
-      mapData = {
-        width: 12,
-        height: 16,
-        tiles: Array.from({ length: 16 }, () =>
-          Array.from({ length: 12 }, () => ({ terrain: "grass", height: 0 }))
-        )
-      };
-    }
 
     minimapSlider.value = 72;
     updateCanvasSizes();
 
-    viewX = (mapData.width - viewWidth) / 2;
-    viewY = (mapData.height - viewHeight) / 2;
+    viewX = (mapWidth - viewWidth) / 2;
+    viewY = (mapHeight - viewHeight) / 2;
     clampView();
     drawAll();
 
-    if (infoDiv) infoDiv.textContent = "Mapa s výškami načítaná";
+    if (infoDiv) infoDiv.textContent = `Heightmapa \( {mapWidth}× \){mapHeight} načítaná`;
   } catch (err) {
     console.error(err);
     if (infoDiv) infoDiv.textContent = "Chyba pri načítaní heightmapy";
   }
 }
 
-function clampView() {
-  if (!mapData) return;
-  viewX = Math.max(0, Math.min(mapData.width - viewWidth, viewX));
-  viewY = Math.max(0, Math.min(mapData.height - viewHeight, viewY));
-}
-
 // ======================
-// Získanie výšky pre chunk (priemer sub-tiles)
-// ======================
-function getChunkHeight(chunkX, chunkY) {
-  if (!heightData) return 0;
-
-  let sum = 0;
-  let count = 0;
-
-  for (let sy = 0; sy < SUB_H; sy++) {
-    for (let sx = 0; sx < SUB_W; sx++) {
-      const hx = chunkX * SUB_W + sx;
-      const hy = chunkY * SUB_H + sy;
-
-      if (hy < heightData.length && hx < heightData[0].length) {
-        sum += heightData[hy][hx];
-        count++;
-      }
-    }
-  }
-  return count > 0 ? sum / count : 0;
-}
-
-// ======================
-// Vykreslenie
+// Vykreslenie – teraz po sub-tiles
 // ======================
 function drawAll() {
   drawDetail();
@@ -239,7 +192,7 @@ function drawAll() {
 }
 
 function drawDetail() {
-  if (!mapData) return;
+  if (!heightData) return;
 
   const w = detailCanvas.width;
   const h = detailCanvas.height;
@@ -260,58 +213,50 @@ function drawDetail() {
       const screenX = x * tileW - offsetX;
       const screenY = y * tileH - offsetY;
 
-      if (mapX < 0 || mapX >= mapData.width || mapY < 0 || mapY >= mapData.height) {
+      if (mapX < 0 || mapX >= mapWidth || mapY < 0 || mapY >= mapHeight) {
         detailCtx.fillStyle = "#111";
         detailCtx.fillRect(screenX, screenY, tileW + 1, tileH + 1);
         continue;
       }
 
-      const height = getChunkHeight(mapX, mapY);
+      const height = heightData[mapY][mapX];
       detailCtx.fillStyle = heightToColor(height);
       detailCtx.fillRect(screenX, screenY, tileW + 1, tileH + 1);
-
-      detailCtx.strokeStyle = "rgba(0,0,0,0.15)";
-      detailCtx.strokeRect(screenX, screenY, tileW, tileH);
     }
   }
 }
 
 function drawOverview() {
-  if (!mapData) return;
+  if (!heightData) return;
 
   const w = overviewCanvas.width;
   const h = overviewCanvas.height;
   overviewCtx.clearRect(0, 0, w, h);
 
-  const scale = Math.min(w / mapData.width, h / mapData.height);
-  const offsetX = (w - mapData.width * scale) / 2;
-  const offsetY = (h - mapData.height * scale) / 2;
+  const scaleX = w / mapWidth;
+  const scaleY = h / mapHeight;
 
-  for (let y = 0; y < mapData.height; y++) {
-    for (let x = 0; x < mapData.width; x++) {
-      const height = getChunkHeight(x, y);
+  for (let y = 0; y < mapHeight; y++) {
+    for (let x = 0; x < mapWidth; x++) {
+      const height = heightData[y][x];
       overviewCtx.fillStyle = heightToColor(height);
-      overviewCtx.fillRect(
-        offsetX + x * scale,
-        offsetY + y * scale,
-        scale + 0.5,
-        scale + 0.5
-      );
+      overviewCtx.fillRect(x * scaleX, y * scaleY, scaleX + 0.5, scaleY + 0.5);
     }
   }
 
+  // Zelený rámček
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2;
   overviewCtx.strokeRect(
-    offsetX + viewX * scale,
-    offsetY + viewY * scale,
-    viewWidth * scale,
-    viewHeight * scale
+    viewX * scaleX,
+    viewY * scaleY,
+    viewWidth * scaleX,
+    viewHeight * scaleY
   );
 }
 
 // ======================
-// Ťahanie
+// Ovládanie
 // ======================
 function startDrag(clientX, clientY, target) {
   isDragging = true;
@@ -323,7 +268,7 @@ function startDrag(clientX, clientY, target) {
 }
 
 function moveDrag(clientX, clientY) {
-  if (!isDragging || !mapData) return;
+  if (!isDragging || !heightData) return;
 
   const dx = clientX - lastX;
   const dy = clientY - lastY;
@@ -334,11 +279,10 @@ function moveDrag(clientX, clientY) {
     viewX -= dx / tileW;
     viewY -= dy / tileH;
   } else if (dragTarget === "overview") {
-    const w = overviewCanvas.width;
-    const h = overviewCanvas.height;
-    const scale = Math.min(w / mapData.width, h / mapData.height);
-    viewX -= dx / scale;
-    viewY -= dy / scale;
+    const scaleX = overviewCanvas.width / mapWidth;
+    const scaleY = overviewCanvas.height / mapHeight;
+    viewX -= dx / scaleX;
+    viewY -= dy / scaleY;
   }
 
   clampView();
@@ -357,84 +301,43 @@ function endDrag(clientX, clientY) {
 }
 
 function handleMinimapClick(clientX, clientY) {
-  if (!mapData) return;
+  if (!heightData) return;
 
   const rect = overviewCanvas.getBoundingClientRect();
   const mouseX = clientX - rect.left;
   const mouseY = clientY - rect.top;
 
-  const w = overviewCanvas.width;
-  const h = overviewCanvas.height;
-  const scale = Math.min(w / mapData.width, h / mapData.height);
-  const offsetX = (w - mapData.width * scale) / 2;
-  const offsetY = (h - mapData.height * scale) / 2;
+  const scaleX = overviewCanvas.width / mapWidth;
+  const scaleY = overviewCanvas.height / mapHeight;
 
-  const mapClickX = (mouseX - offsetX) / scale;
-  const mapClickY = (mouseY - offsetY) / scale;
-
-  viewX = mapClickX - viewWidth / 2;
-  viewY = mapClickY - viewHeight / 2;
+  viewX = mouseX / scaleX - viewWidth / 2;
+  viewY = mouseY / scaleY - viewHeight / 2;
 
   clampView();
   drawAll();
 }
 
-// ======================
 // Udalosti
-// ======================
-detailCanvas.addEventListener("mousedown", e => {
-  e.preventDefault();
-  startDrag(e.clientX, e.clientY, "detail");
-});
+detailCanvas.addEventListener("mousedown", e => { e.preventDefault(); startDrag(e.clientX, e.clientY, "detail"); });
 detailCanvas.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
 detailCanvas.addEventListener("mouseup", e => endDrag(e.clientX, e.clientY));
 detailCanvas.addEventListener("mouseleave", () => endDrag());
 
-detailCanvas.addEventListener("touchstart", e => {
-  e.preventDefault();
-  startDrag(e.touches[0].clientX, e.touches[0].clientY, "detail");
-}, { passive: false });
-detailCanvas.addEventListener("touchmove", e => {
-  e.preventDefault();
-  moveDrag(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
-detailCanvas.addEventListener("touchend", e => {
-  if (e.changedTouches.length) endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
-  else endDrag();
-});
+detailCanvas.addEventListener("touchstart", e => { e.preventDefault(); startDrag(e.touches[0].clientX, e.touches[0].clientY, "detail"); }, { passive: false });
+detailCanvas.addEventListener("touchmove", e => { e.preventDefault(); moveDrag(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+detailCanvas.addEventListener("touchend", e => { if (e.changedTouches.length) endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY); else endDrag(); });
 
-overviewCanvas.addEventListener("mousedown", e => {
-  e.preventDefault();
-  startDrag(e.clientX, e.clientY, "overview");
-});
+overviewCanvas.addEventListener("mousedown", e => { e.preventDefault(); startDrag(e.clientX, e.clientY, "overview"); });
 overviewCanvas.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
 overviewCanvas.addEventListener("mouseup", e => endDrag(e.clientX, e.clientY));
 overviewCanvas.addEventListener("mouseleave", () => endDrag());
 
-overviewCanvas.addEventListener("touchstart", e => {
-  e.preventDefault();
-  startDrag(e.touches[0].clientX, e.touches[0].clientY, "overview");
-}, { passive: false });
-overviewCanvas.addEventListener("touchmove", e => {
-  e.preventDefault();
-  moveDrag(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
-overviewCanvas.addEventListener("touchend", e => {
-  if (e.changedTouches.length) endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
-  else endDrag();
-});
+overviewCanvas.addEventListener("touchstart", e => { e.preventDefault(); startDrag(e.touches[0].clientX, e.touches[0].clientY, "overview"); }, { passive: false });
+overviewCanvas.addEventListener("touchmove", e => { e.preventDefault(); moveDrag(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+overviewCanvas.addEventListener("touchend", e => { if (e.changedTouches.length) endDrag(e.changedTouches[0].clientX, e.changedTouches[0].clientY); else endDrag(); });
 
-minimapSlider.addEventListener("input", () => {
-  updateMinimapSize();
-  drawAll();
-});
+minimapSlider.addEventListener("input", () => { updateMinimapSize(); drawAll(); });
+window.addEventListener("resize", () => { updateCanvasSizes(); drawAll(); });
 
-window.addEventListener("resize", () => {
-  updateCanvasSizes();
-  drawAll();
-});
-
-// ======================
 // Spustenie
-// ======================
 loadAll();
