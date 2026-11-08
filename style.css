@@ -13,7 +13,7 @@ body {
   width: 100vw;
 }
 
-/* Výška lišty – 7 % obrazovky */
+/* Výška lišty – 7 % */
 :root {
   --bar-height: 7vh;
 }
@@ -37,17 +37,17 @@ body {
   cursor: grabbing;
 }
 
-/* Minimap – vzdialenosť od spodku = výška lišty */
+/* ===== MINIMAP ===== */
 #minimap-container {
-  position: fixed;                 /* ← dôležité: voči celej obrazovke */
+  position: fixed;
   right: 12px;
-  bottom: calc(var(--bar-height) + 10px);  /* výška lišty + malý odstup */
+  bottom: calc(7vh + 12px);   /* presne výška lišty + 12px */
   background: #1a1a1a;
   border: 2px solid #555;
   border-radius: 5px;
   padding: 3px;
   box-shadow: 0 4px 14px rgba(0,0,0,0.55);
-  z-index: 20;
+  z-index: 25;
   transition: opacity 0.2s, transform 0.2s;
 }
 
@@ -64,18 +64,18 @@ body {
   touch-action: none;
 }
 
-/* Spodná lišta */
+/* ===== SPODNÁ LIŠTA ===== */
 #bottom-bar {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   width: 100%;
-  height: var(--bar-height);
+  height: 7vh;
   background: #1c1c1c;
   border-top: 1px solid #444;
   display: flex;
   align-items: center;
-  justify-content: flex-end;    /* slider bude vpravo */
+  justify-content: flex-end;
   padding: 0 16px;
   gap: 12px;
   z-index: 30;
@@ -118,7 +118,7 @@ body {
 }
 
 #info {
-  position: absolute;
+  position: fixed;
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
