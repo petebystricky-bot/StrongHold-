@@ -116,6 +116,10 @@ async function loadMap() {
     const response = await fetch("data/mapa.json");
     mapData = await response.json();
 
+    // Základná veľkosť minimapy = 28 % maxima
+    // (posuvník je otočený: 0 = max, 100 = min → 28 % = hodnota 72)
+    minimapSlider.value = 72;
+
     updateCanvasSizes();
 
     viewX = (mapData.width - viewWidth) / 2;
