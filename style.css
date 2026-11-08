@@ -39,9 +39,9 @@ body {
 
 /* Minimap – vzdialenosť od spodku = výška lišty */
 #minimap-container {
-  position: absolute;
+  position: fixed;                 /* ← dôležité: voči celej obrazovke */
   right: 12px;
-  bottom: 12px;                 /* malý vnútorný odstup */
+  bottom: calc(var(--bar-height) + 10px);  /* výška lišty + malý odstup */
   background: #1a1a1a;
   border: 2px solid #555;
   border-radius: 5px;
