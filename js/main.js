@@ -44,7 +44,7 @@ function heightToColor(height, shade) {
 
 var heightData = null;
 var srcW = 0, srcH = 0;
-var terrainCanvas = null;   // predpripravená textúra
+var terrainCanvas = null;
 var terrainCtx = null;
 
 var detailCanvas = document.getElementById("detailCanvas");
@@ -55,12 +55,12 @@ var infoDiv = document.getElementById("info");
 var minimapContainer = document.getElementById("minimap-container");
 var minimapSlider = document.getElementById("minimapSlider");
 
-// Koľkokrát jemnejšia textúra oproti heightmape (8 = výrazne plynulé)
-var TEX_SCALE = 8;
+// 32× jemnejšia textúra
+var TEX_SCALE = 32;
 
-var viewX = 0;      // v pixeloch textúry
+var viewX = 0;
 var viewY = 0;
-var viewZoom = 1;   // 1 = vidíme primeraný kus
+var viewZoom = 1;
 
 var isDragging = false;
 var lastX = 0, lastY = 0;
@@ -102,7 +102,6 @@ function loadHeightmap() {
   });
 }
 
-// Bilineárna vzorka výšky
 function sampleH(x, y) {
   x = Math.max(0, Math.min(srcW - 1.001, x));
   y = Math.max(0, Math.min(srcH - 1.001, y));
@@ -115,7 +114,6 @@ function sampleH(x, y) {
   return (h00*(1-fx)+h10*fx)*(1-fy) + (h01*(1-fx)+h11*fx)*fy;
 }
 
-// Jednoduchá normála + tieň
 function sampleShade(x, y) {
   var hL = sampleH(x - 0.6, y);
   var hR = sampleH(x + 0.6, y);
@@ -130,7 +128,6 @@ function sampleShade(x, y) {
   return 0.5 + Math.max(0, dot) * 0.65;
 }
 
-// Vytvorenie vysokej textúry terénu (raz pri načítaní)
 function buildTerrainTexture() {
   var tw = srcW * TEX_SCALE;
   var th = srcH * TEX_SCALE;
@@ -206,7 +203,6 @@ function drawDetail() {
   var h = detailCanvas.height;
   detailCtx.clearRect(0, 0, w, h);
 
-  // Kreslíme časť textúry
   var visW = w / viewZoom;
   var visH = h / viewZoom;
 
@@ -229,7 +225,6 @@ function drawOverview() {
   overviewCtx.imageSmoothingEnabled = true;
   overviewCtx.drawImage(terrainCanvas, 0, 0, w, h);
 
-  // Zelený rámček
   var scaleX = w / terrainCanvas.width;
   var scaleY = h / terrainCanvas.height;
   var visW = detailCanvas.width / viewZoom;
@@ -324,7 +319,7 @@ function init() {
     showError("Chyba: chyba element #detailCanvas");
     return;
   }
-  if (infoDiv) infoDiv.textContent = "Generujem texturu terenu...";
+  if (infoDiv) infoDiv.textContent = "Generujem texturu terenu (moze chvilu trvat)...";
 
   loadHeightmap().then(function(heights) {
     heightData = heights;
@@ -338,14 +333,10 @@ function init() {
     if (minimapSlider) minimapSlider.value = 72;
     updateCanvasSizes();
 
-    // Vycentrujeme pohľad
-    viewZoom = Math.min(
-      detailCanvas.width / (terrainCanvas.width * 0.5),
-      detailCanvas.height / (terrainCanvas.height * 0.5),
-      2
-    );
-    viewX = (terrainCanvas.width - detailCanvas.width / viewZoom) / 2;
-    viewY = (terrainCanvas.height - detailCanvas.height / viewZoom) / 2;
+    // Mapa vyplni celu sirku obrazovky
+    viewZoom = detailCanvas.width / terrainCanvas.width;
+    viewX = 0;
+    viewY = Math.max(0, (terrainCanvas.height - detailCanvas.height / viewZoom) / 2);
     clampView();
     drawAll();
   }).catch(function(err) {
