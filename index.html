@@ -7,9 +7,12 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
   <div id="game-container">
+    <!-- Hlavná mapa -->
     <canvas id="detailCanvas"></canvas>
 
+    <!-- Minimap -->
     <div id="minimap-container">
       <canvas id="overviewCanvas"></canvas>
     </div>
@@ -18,10 +21,11 @@
   <!-- Spodná lišta -->
   <div id="bottom-bar">
     <span class="slider-label">Minimap</span>
-    <input type="range" id="minimapSlider" min="0" max="100" value="25">
+    <input type="range" id="minimapSlider" min="0" max="100" value="72">
   </div>
 
-  <div id="info">Ťahaj mapu • Klikni na minimapu pre presun • Posuvník mení veľkosť minimapy</div>
+  <!-- Info riadok -->
+  <div id="info">Načítavam mapu...</div>
 
   <script src="js/main.js"></script>
 </body>
