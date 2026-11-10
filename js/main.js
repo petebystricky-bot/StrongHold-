@@ -1,12 +1,12 @@
 function showError(msg) {
-  const info = document.getElementById("info");
+  var info = document.getElementById("info");
   if (info) {
     info.textContent = "CHYBA: " + msg;
     info.style.color = "#f87171";
   }
-  const canvas = document.getElementById("detailCanvas");
+  var canvas = document.getElementById("detailCanvas");
   if (canvas) {
-    const ctx = canvas.getContext("2d");
+    var ctx = canvas.getContext("2d");
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight - 50;
     ctx.fillStyle = "#1a1a1a";
@@ -39,11 +39,13 @@ function heightToColor(height, shade) {
   r = Math.min(255, Math.max(0, r * shade));
   g = Math.min(255, Math.max(0, g * shade));
   b = Math.min(255, Math.max(0, b * shade));
-  return "rgb(" + (r|0) + "," + (g|0) + "," + (b|0) + ")";
+  return [r|0, g|0, b|0];
 }
 
 var heightData = null;
-var mesh = null;
+var srcW = 0, srcH = 0;
+var terrainCanvas = null;   // predpripravená textúra
+var terrainCtx = null;
 
 var detailCanvas = document.getElementById("detailCanvas");
 var overviewCanvas = document.getElementById("overviewCanvas");
@@ -53,11 +55,12 @@ var infoDiv = document.getElementById("info");
 var minimapContainer = document.getElementById("minimap-container");
 var minimapSlider = document.getElementById("minimapSlider");
 
-var RENDER_SCALE = 4;
-var viewWidth = 40;
-var viewHeight = 50;
-var viewX = 0;
+// Koľkokrát jemnejšia textúra oproti heightmape (8 = výrazne plynulé)
+var TEX_SCALE = 8;
+
+var viewX = 0;      // v pixeloch textúry
 var viewY = 0;
+var viewZoom = 1;   // 1 = vidíme primeraný kus
 
 var isDragging = false;
 var lastX = 0, lastY = 0;
@@ -85,6 +88,8 @@ function loadHeightmap() {
           }
           heights.push(row);
         }
+        srcW = img.width;
+        srcH = img.height;
         resolve(heights);
       } catch (e) {
         reject(e);
@@ -97,93 +102,76 @@ function loadHeightmap() {
   });
 }
 
-function buildMesh(heights) {
-  var w = heights[0].length;
-  var h = heights.length;
-  var positions = new Float32Array(w * h * 3);
-  var normals = new Float32Array(w * h * 3);
+// Bilineárna vzorka výšky
+function sampleH(x, y) {
+  x = Math.max(0, Math.min(srcW - 1.001, x));
+  y = Math.max(0, Math.min(srcH - 1.001, y));
+  var x0 = Math.floor(x), y0 = Math.floor(y);
+  var x1 = Math.min(x0 + 1, srcW - 1);
+  var y1 = Math.min(y0 + 1, srcH - 1);
+  var fx = x - x0, fy = y - y0;
+  var h00 = heightData[y0][x0], h10 = heightData[y0][x1];
+  var h01 = heightData[y1][x0], h11 = heightData[y1][x1];
+  return (h00*(1-fx)+h10*fx)*(1-fy) + (h01*(1-fx)+h11*fx)*fy;
+}
 
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      var i = (y * w + x) * 3;
-      positions[i] = x;
-      positions[i + 1] = y;
-      positions[i + 2] = heights[y][x];
+// Jednoduchá normála + tieň
+function sampleShade(x, y) {
+  var hL = sampleH(x - 0.6, y);
+  var hR = sampleH(x + 0.6, y);
+  var hD = sampleH(x, y - 0.6);
+  var hU = sampleH(x, y + 0.6);
+  var nx = hL - hR;
+  var ny = hD - hU;
+  var nz = 3.0;
+  var len = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
+  nx /= len; ny /= len; nz /= len;
+  var dot = nx*(-0.45) + ny*(-0.5) + nz*0.75;
+  return 0.5 + Math.max(0, dot) * 0.65;
+}
+
+// Vytvorenie vysokej textúry terénu (raz pri načítaní)
+function buildTerrainTexture() {
+  var tw = srcW * TEX_SCALE;
+  var th = srcH * TEX_SCALE;
+
+  terrainCanvas = document.createElement("canvas");
+  terrainCanvas.width = tw;
+  terrainCanvas.height = th;
+  terrainCtx = terrainCanvas.getContext("2d");
+
+  var imgData = terrainCtx.createImageData(tw, th);
+  var data = imgData.data;
+
+  for (var py = 0; py < th; py++) {
+    for (var px = 0; px < tw; px++) {
+      var hx = px / TEX_SCALE;
+      var hy = py / TEX_SCALE;
+      var height = sampleH(hx, hy);
+      var shade = sampleShade(hx, hy);
+      var col = heightToColor(height, shade);
+      var i = (py * tw + px) * 4;
+      data[i] = col[0];
+      data[i+1] = col[1];
+      data[i+2] = col[2];
+      data[i+3] = 255;
     }
   }
-
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      var i = (y * w + x) * 3;
-      var hL = heights[y][Math.max(0, x - 1)];
-      var hR = heights[y][Math.min(w - 1, x + 1)];
-      var hD = heights[Math.max(0, y - 1)][x];
-      var hU = heights[Math.min(h - 1, y + 1)][x];
-      var nx = hL - hR;
-      var ny = hD - hU;
-      var nz = 2.5;
-      var len = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
-      normals[i] = nx / len;
-      normals[i + 1] = ny / len;
-      normals[i + 2] = nz / len;
-    }
-  }
-  return { positions: positions, normals: normals, width: w, height: h };
+  terrainCtx.putImageData(imgData, 0, 0);
 }
 
-function sampleHeight(x, y) {
-  var w = mesh.width, h = mesh.height;
-  var x0 = Math.floor(x), y0 = Math.floor(y);
-  var x1 = Math.min(x0 + 1, w - 1);
-  var y1 = Math.min(y0 + 1, h - 1);
-  var fx = x - x0, fy = y - y0;
-  var h00 = mesh.positions[(y0 * w + x0) * 3 + 2];
-  var h10 = mesh.positions[(y0 * w + x1) * 3 + 2];
-  var h01 = mesh.positions[(y1 * w + x0) * 3 + 2];
-  var h11 = mesh.positions[(y1 * w + x1) * 3 + 2];
-  return (h00*(1-fx) + h10*fx)*(1-fy) + (h01*(1-fx) + h11*fx)*fy;
-}
+function updateCanvasSizes() {
+  if (!detailCanvas) return;
+  var bar = document.getElementById("bottom-bar");
+  var barHeight = bar ? bar.offsetHeight : 48;
+  detailCanvas.width = window.innerWidth;
+  detailCanvas.height = window.innerHeight - barHeight;
 
-function sampleNormal(x, y) {
-  var w = mesh.width, h = mesh.height;
-  var x0 = Math.floor(x), y0 = Math.floor(y);
-  var x1 = Math.min(x0 + 1, w - 1);
-  var y1 = Math.min(y0 + 1, h - 1);
-  var fx = x - x0, fy = y - y0;
-
-  function n(ix, iy) {
-    var i = (iy * w + ix) * 3;
-    return [mesh.normals[i], mesh.normals[i+1], mesh.normals[i+2]];
+  if (minimapContainer) {
+    minimapContainer.style.bottom = (barHeight + 6) + "px";
   }
-  var n00 = n(x0,y0), n10 = n(x1,y0), n01 = n(x0,y1), n11 = n(x1,y1);
-  var out = [0,0,0];
-  for (var k = 0; k < 3; k++) {
-    var a = n00[k]*(1-fx) + n10[k]*fx;
-    var b = n01[k]*(1-fx) + n11[k]*fx;
-    out[k] = a*(1-fy) + b*fy;
-  }
-  return out;
-}
-
-function getShade(normal) {
-  var dot = normal[0]*(-0.4) + normal[1]*(-0.5) + normal[2]*0.8;
-  return 0.55 + Math.max(0, dot) * 0.6;
-}
-
-function calculateViewSize() {
-  if (!mesh) return;
-  var w = detailCanvas.width, h = detailCanvas.height;
-  var aspect = w / h;
-  var cols = 40, rows = 50;
-  if (aspect >= 1) {
-    rows = 40;
-    cols = Math.max(40, Math.round(rows * aspect));
-  } else {
-    cols = 40;
-    rows = Math.max(40, Math.round(cols / aspect));
-  }
-  viewWidth = Math.min(cols, mesh.width * RENDER_SCALE);
-  viewHeight = Math.min(rows, mesh.height * RENDER_SCALE);
+  updateMinimapSize();
+  clampView();
 }
 
 function updateMinimapSize() {
@@ -199,24 +187,12 @@ function updateMinimapSize() {
   }
 }
 
-function updateCanvasSizes() {
-  if (!detailCanvas) return;
-  var bar = document.getElementById("bottom-bar");
-  var barHeight = bar ? bar.offsetHeight : 48;
-  detailCanvas.width = window.innerWidth;
-  detailCanvas.height = window.innerHeight - barHeight;
-  if (minimapContainer) minimapContainer.style.bottom = (barHeight + 6) + "px";
-  if (mesh) {
-    calculateViewSize();
-    updateMinimapSize();
-    clampView();
-  }
-}
-
 function clampView() {
-  if (!mesh) return;
-  viewX = Math.max(0, Math.min(mesh.width * RENDER_SCALE - viewWidth, viewX));
-  viewY = Math.max(0, Math.min(mesh.height * RENDER_SCALE - viewHeight, viewY));
+  if (!terrainCanvas) return;
+  var visW = detailCanvas.width / viewZoom;
+  var visH = detailCanvas.height / viewZoom;
+  viewX = Math.max(0, Math.min(terrainCanvas.width - visW, viewX));
+  viewY = Math.max(0, Math.min(terrainCanvas.height - visH, viewY));
 }
 
 function drawAll() {
@@ -225,59 +201,47 @@ function drawAll() {
 }
 
 function drawDetail() {
-  if (!mesh || !detailCtx) return;
-  var w = detailCanvas.width, h = detailCanvas.height;
+  if (!terrainCanvas || !detailCtx) return;
+  var w = detailCanvas.width;
+  var h = detailCanvas.height;
   detailCtx.clearRect(0, 0, w, h);
-  var tileW = w / viewWidth;
-  var tileH = h / viewHeight;
-  var startX = Math.floor(viewX);
-  var startY = Math.floor(viewY);
-  var offX = (viewX - startX) * tileW;
-  var offY = (viewY - startY) * tileH;
 
-  for (var y = 0; y <= viewHeight; y++) {
-    for (var x = 0; x <= viewWidth; x++) {
-      var mx = (startX + x) / RENDER_SCALE;
-      var my = (startY + y) / RENDER_SCALE;
-      var sx = x * tileW - offX;
-      var sy = y * tileH - offY;
+  // Kreslíme časť textúry
+  var visW = w / viewZoom;
+  var visH = h / viewZoom;
 
-      if (mx < 0 || mx >= mesh.width - 0.01 || my < 0 || my >= mesh.height - 0.01) {
-        detailCtx.fillStyle = "#111";
-        detailCtx.fillRect(sx, sy, tileW + 1, tileH + 1);
-        continue;
-      }
-      var height = sampleHeight(mx, my);
-      var shade = getShade(sampleNormal(mx, my));
-      detailCtx.fillStyle = heightToColor(height, shade);
-      detailCtx.fillRect(sx, sy, tileW + 1, tileH + 1);
-    }
-  }
+  detailCtx.imageSmoothingEnabled = true;
+  detailCtx.imageSmoothingQuality = "high";
+
+  detailCtx.drawImage(
+    terrainCanvas,
+    viewX, viewY, visW, visH,
+    0, 0, w, h
+  );
 }
 
 function drawOverview() {
-  if (!mesh || !overviewCtx) return;
-  var w = overviewCanvas.width, h = overviewCanvas.height;
+  if (!terrainCanvas || !overviewCtx) return;
+  var w = overviewCanvas.width;
+  var h = overviewCanvas.height;
   overviewCtx.clearRect(0, 0, w, h);
-  var scaleX = w / mesh.width;
-  var scaleY = h / mesh.height;
 
-  for (var y = 0; y < mesh.height; y++) {
-    for (var x = 0; x < mesh.width; x++) {
-      var i = (y * mesh.width + x) * 3;
-      var height = mesh.positions[i + 2];
-      var normal = [mesh.normals[i], mesh.normals[i+1], mesh.normals[i+2]];
-      overviewCtx.fillStyle = heightToColor(height, getShade(normal));
-      overviewCtx.fillRect(x * scaleX, y * scaleY, scaleX + 0.5, scaleY + 0.5);
-    }
-  }
+  overviewCtx.imageSmoothingEnabled = true;
+  overviewCtx.drawImage(terrainCanvas, 0, 0, w, h);
+
+  // Zelený rámček
+  var scaleX = w / terrainCanvas.width;
+  var scaleY = h / terrainCanvas.height;
+  var visW = detailCanvas.width / viewZoom;
+  var visH = detailCanvas.height / viewZoom;
+
   overviewCtx.strokeStyle = "#22c55e";
   overviewCtx.lineWidth = 2;
   overviewCtx.strokeRect(
-    (viewX / RENDER_SCALE) * scaleX,
-    (viewY / RENDER_SCALE) * scaleY,
-    (viewWidth / RENDER_SCALE) * scaleX,
-    (viewHeight / RENDER_SCALE) * scaleY
+    viewX * scaleX,
+    viewY * scaleY,
+    visW * scaleX,
+    visH * scaleY
   );
 }
 
@@ -287,22 +251,27 @@ function startDrag(cx, cy, target) {
   dragStartX = cx; dragStartY = cy;
   dragTarget = target;
 }
+
 function moveDrag(cx, cy) {
-  if (!isDragging || !mesh) return;
-  var dx = cx - lastX, dy = cy - lastY;
+  if (!isDragging || !terrainCanvas) return;
+  var dx = cx - lastX;
+  var dy = cy - lastY;
+
   if (dragTarget === "detail") {
-    viewX -= dx / (detailCanvas.width / viewWidth);
-    viewY -= dy / (detailCanvas.height / viewHeight);
+    viewX -= dx / viewZoom;
+    viewY -= dy / viewZoom;
   } else {
-    var sx = overviewCanvas.width / mesh.width;
-    var sy = overviewCanvas.height / mesh.height;
-    viewX -= (dx / sx) * RENDER_SCALE;
-    viewY -= (dy / sy) * RENDER_SCALE;
+    var scaleX = overviewCanvas.width / terrainCanvas.width;
+    var scaleY = overviewCanvas.height / terrainCanvas.height;
+    viewX -= dx / scaleX;
+    viewY -= dy / scaleY;
   }
+
   clampView();
   lastX = cx; lastY = cy;
   drawAll();
 }
+
 function endDrag(cx, cy) {
   if (dragTarget === "overview" && cx != null && Math.hypot(cx - dragStartX, cy - dragStartY) < 6) {
     handleMinimapClick(cx, cy);
@@ -310,14 +279,19 @@ function endDrag(cx, cy) {
   isDragging = false;
   dragTarget = null;
 }
+
 function handleMinimapClick(cx, cy) {
-  if (!mesh) return;
+  if (!terrainCanvas) return;
   var rect = overviewCanvas.getBoundingClientRect();
-  var mx = cx - rect.left, my = cy - rect.top;
-  var sx = overviewCanvas.width / mesh.width;
-  var sy = overviewCanvas.height / mesh.height;
-  viewX = (mx / sx) * RENDER_SCALE - viewWidth / 2;
-  viewY = (my / sy) * RENDER_SCALE - viewHeight / 2;
+  var mx = cx - rect.left;
+  var my = cy - rect.top;
+  var scaleX = overviewCanvas.width / terrainCanvas.width;
+  var scaleY = overviewCanvas.height / terrainCanvas.height;
+
+  var visW = detailCanvas.width / viewZoom;
+  var visH = detailCanvas.height / viewZoom;
+  viewX = mx / scaleX - visW / 2;
+  viewY = my / scaleY - visH / 2;
   clampView();
   drawAll();
 }
@@ -347,22 +321,31 @@ window.addEventListener("resize", function() { updateCanvasSizes(); drawAll(); }
 
 function init() {
   if (!detailCanvas) {
-    showError("Chýba element #detailCanvas");
+    showError("Chyba: chyba element #detailCanvas");
     return;
   }
+  if (infoDiv) infoDiv.textContent = "Generujem texturu terenu...";
+
   loadHeightmap().then(function(heights) {
     heightData = heights;
-    mesh = buildMesh(heights);
+    buildTerrainTexture();
 
     if (infoDiv) {
-      infoDiv.textContent = "Mesh " + mesh.width + "x" + mesh.height + " | Heightmapa nacitana";
+      infoDiv.textContent = "Textura " + terrainCanvas.width + "x" + terrainCanvas.height + " | Plynuly teren";
       infoDiv.style.color = "#bbb";
     }
 
     if (minimapSlider) minimapSlider.value = 72;
     updateCanvasSizes();
-    viewX = (mesh.width * RENDER_SCALE - viewWidth) / 2;
-    viewY = (mesh.height * RENDER_SCALE - viewHeight) / 2;
+
+    // Vycentrujeme pohľad
+    viewZoom = Math.min(
+      detailCanvas.width / (terrainCanvas.width * 0.5),
+      detailCanvas.height / (terrainCanvas.height * 0.5),
+      2
+    );
+    viewX = (terrainCanvas.width - detailCanvas.width / viewZoom) / 2;
+    viewY = (terrainCanvas.height - detailCanvas.height / viewZoom) / 2;
     clampView();
     drawAll();
   }).catch(function(err) {
