@@ -18,7 +18,7 @@ function showError(msg) {
 }
 
 // ======================
-// Jednoduchý value noise
+// Noise
 // ======================
 function hash(n) {
   n = (n << 13) ^ n;
@@ -30,7 +30,6 @@ function smoothNoise(x, y) {
   var y0 = Math.floor(y);
   var fx = x - x0;
   var fy = y - y0;
-  // jemné vyhladenie
   fx = fx * fx * (3 - 2 * fx);
   fy = fy * fy * (3 - 2 * fy);
 
@@ -44,7 +43,6 @@ function smoothNoise(x, y) {
   return nx0 * (1 - fy) + nx1 * fy;
 }
 
-// Viacoktávový noise (0..1)
 function fbm(x, y, octaves) {
   var value = 0;
   var amplitude = 0.5;
@@ -60,46 +58,56 @@ function fbm(x, y, octaves) {
 }
 
 // ======================
-// Farby – iba odtiene zelenej + voda
+// Plynulé farby (bez skokov)
 // ======================
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
 function heightToColor(height, shade, colorNoise) {
   shade = shade || 1;
   colorNoise = colorNoise || 0;
 
   var r, g, b;
 
-  // Voda / veľmi nízko
-  if (height < 180) {
-    var k = Math.max(0, height / 180);
-    r = 20 + k * 25;
-    g = 60 + k * 50;
-    b = 110 + k * 50;
+  // Voda – plynulý prechod do zelenej
+  if (height < 220) {
+    var t = Math.max(0, Math.min(1, height / 220));
+    // tmavomodrá → tyrkysová → začiatok zelenej
+    r = lerp(18, 45, t);
+    g = lerp(55, 100, t);
+    b = lerp(120, 70, t);
   } else {
-    // Iba zelená škála podľa výšky
-    var t = Math.max(0, Math.min(1, (height - 180) / 1320));
+    // Celá zelená škála plynule podľa výšky (0..1)
+    var t = Math.max(0, Math.min(1, (height - 220) / 1280));
 
-    // tmavozelená (nížina) → stredne zelená → svetlozelená / žltkastá (vyššie)
-    if (t < 0.35) {
-      var k = t / 0.35;
-      r = 30 + k * 40;
-      g = 90 + k * 70;
-      b = 35 + k * 20;
-    } else if (t < 0.7) {
-      var k = (t - 0.35) / 0.35;
-      r = 70 + k * 50;
-      g = 140 + k * 30;
-      b = 50 - k * 15;
+    // Kontrolné body (plynulá interpolácia medzi nimi)
+    // t=0: tmavozelená nížina
+    // t=0.4: sýta zelená
+    // t=0.75: olivová / svetlejšia
+    // t=1: svetlozelená až žltkastá (vyššie polohy)
+
+    if (t < 0.4) {
+      var k = t / 0.4;
+      r = lerp(40, 75, k);
+      g = lerp(95, 150, k);
+      b = lerp(45, 55, k);
+    } else if (t < 0.75) {
+      var k = (t - 0.4) / 0.35;
+      r = lerp(75, 130, k);
+      g = lerp(150, 165, k);
+      b = lerp(55, 50, k);
     } else {
-      var k = (t - 0.7) / 0.3;
-      r = 120 + k * 60;
-      g = 160 + k * 40;
-      b = 40 + k * 30;
+      var k = (t - 0.75) / 0.25;
+      r = lerp(130, 175, k);
+      g = lerp(165, 185, k);
+      b = lerp(50, 75, k);
     }
 
     // Mierny noise na farby
-    r += colorNoise * 18;
-    g += colorNoise * 14;
-    b += colorNoise * 8;
+    r += colorNoise * 16;
+    g += colorNoise * 12;
+    b += colorNoise * 6;
   }
 
   r = Math.min(255, Math.max(0, r * shade));
@@ -126,10 +134,14 @@ var minimapSlider = document.getElementById("minimapSlider");
 
 var TEX_SCALE = 32;
 
-// Noise parametre
-var HEIGHT_NOISE_STRENGTH = 32;   // stredná intenzita (± metre)
-var HEIGHT_NOISE_SCALE = 0.18;    // frekvencia
-var COLOR_NOISE_STRENGTH = 0.12;  // mierny noise na farby
+var HEIGHT_NOISE_STRENGTH = 28;
+var HEIGHT_NOISE_SCALE = 0.18;
+var COLOR_NOISE_STRENGTH = 0.10;
+
+// Termálna erózia
+var THERMAL_ITERATIONS = 30;   // koľko prechodov
+var THERMAL_TALUS = 0.028;     // maximálny sklon (vyššie = viac materiálu sa pohne)
+var THERMAL_RATE = 0.35;       // koľko materiálu sa presunie za jeden krok
 
 var viewX = 0;
 var viewY = 0;
@@ -175,6 +187,65 @@ function loadHeightmap() {
   });
 }
 
+// ======================
+// Termálna erózia
+// ======================
+function applyThermalErosion(heights, iterations) {
+  var w = heights[0].length;
+  var h = heights.length;
+  var maxDiff = THERMAL_TALUS * 1500; // v metroch
+
+  for (var iter = 0; iter < iterations; iter++) {
+    // Pracujeme na kópii, aby sme nemiešali staré a nové hodnoty v jednom prechode
+    var next = [];
+    for (var y = 0; y < h; y++) {
+      next[y] = heights[y].slice();
+    }
+
+    for (var y = 1; y < h - 1; y++) {
+      for (var x = 1; x < w - 1; x++) {
+        var h0 = heights[y][x];
+        var neighbors = [
+          [x + 1, y], [x - 1, y],
+          [x, y + 1], [x, y - 1],
+          [x + 1, y + 1], [x - 1, y - 1],
+          [x + 1, y - 1], [x - 1, y + 1]
+        ];
+
+        var totalMove = 0;
+        var moves = [];
+
+        for (var n = 0; n < neighbors.length; n++) {
+          var nx = neighbors[n][0];
+          var ny = neighbors[n][1];
+          var hN = heights[ny][nx];
+          var diff = h0 - hN;
+
+          if (diff > maxDiff) {
+            var amount = (diff - maxDiff) * THERMAL_RATE;
+            moves.push({ x: nx, y: ny, amount: amount });
+            totalMove += amount;
+          }
+        }
+
+        if (totalMove > 0) {
+          // Neodoberieme viac, než je rozumné
+          var scale = Math.min(1, (h0 * 0.15) / totalMove);
+          next[y][x] -= totalMove * scale;
+
+          for (var m = 0; m < moves.length; m++) {
+            var mv = moves[m];
+            next[mv.y][mv.x] += mv.amount * scale;
+          }
+        }
+      }
+    }
+
+    heights = next;
+  }
+  return heights;
+}
+
 function sampleH(x, y) {
   x = Math.max(0, Math.min(srcW - 1.001, x));
   y = Math.max(0, Math.min(srcH - 1.001, y));
@@ -186,7 +257,6 @@ function sampleH(x, y) {
   var h01 = heightData[y1][x0], h11 = heightData[y1][x1];
   var base = (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
 
-  // Stredný noise na výšky
   var n = fbm(x * HEIGHT_NOISE_SCALE, y * HEIGHT_NOISE_SCALE, 4);
   var noiseOffset = (n - 0.5) * 2 * HEIGHT_NOISE_STRENGTH;
   return base + noiseOffset;
@@ -204,11 +274,9 @@ function sampleShade(x, y) {
   var len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
   nx /= len; ny /= len; nz /= len;
 
-  // Hlavné svetlo
   var dot = nx * (-0.4) + ny * (-0.55) + nz * 0.75;
   var shade = 0.48 + Math.max(0, dot) * 0.7;
 
-  // Jemný efekt v údoliach (tmavšie)
   var slope = Math.sqrt(nx * nx + ny * ny);
   if (slope < 0.15) {
     shade *= 0.92;
@@ -236,8 +304,6 @@ function buildTerrainTexture() {
 
       var height = sampleH(hx, hy);
       var shade = sampleShade(hx, hy);
-
-      // Mierny noise na farby (−0.5 .. 0.5)
       var cn = (fbm(hx * 0.35 + 20, hy * 0.35 + 10, 3) - 0.5) * 2 * COLOR_NOISE_STRENGTH;
 
       var col = heightToColor(height, shade, cn);
@@ -413,14 +479,18 @@ function init() {
     showError("Chyba: chyba element #detailCanvas");
     return;
   }
-  if (infoDiv) infoDiv.textContent = "Generujem texturu s noise (moze chvilu trvat)...";
+  if (infoDiv) infoDiv.textContent = "Nacitam heightmapu + termalna erozia...";
 
   loadHeightmap().then(function(heights) {
-    heightData = heights;
+    // Termálna erózia
+    if (infoDiv) infoDiv.textContent = "Aplikujem termalnu eroziu...";
+    heightData = applyThermalErosion(heights, THERMAL_ITERATIONS);
+
+    if (infoDiv) infoDiv.textContent = "Generujem texturu...";
     buildTerrainTexture();
 
     if (infoDiv) {
-      infoDiv.textContent = "Textura " + terrainCanvas.width + "x" + terrainCanvas.height + " | Zelena paleta + noise";
+      infoDiv.textContent = "Textura " + terrainCanvas.width + "x" + terrainCanvas.height + " | Erozia + plynule farby";
       infoDiv.style.color = "#bbb";
     }
 
