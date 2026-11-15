@@ -2,25 +2,42 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const canvas = document.getElementById("canvas3d");
+const overviewCanvas = document.getElementById("overviewCanvas");
+const overviewCtx = overviewCanvas.getContext("2d");
 const info = document.getElementById("info");
+const coordsEl = document.getElementById("coords");
+const minimapContainer = document.getElementById("minimap-container");
+const minimapSlider = document.getElementById("minimapSlider");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0b0b);
+scene.background = new THREE.Color(0x87a0b0);
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500000);
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  500000
+);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+// Hlavná kamera – BEZ limitu 30°
+controls.minPolarAngle = 0;
+controls.maxPolarAngle = Math.PI;
+controls.enablePan = true;
 
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const sun = new THREE.DirectionalLight(0xfff5e0, 0.55);
+sun.position.set(100, 200, 80);
+scene.add(sun);
+
+// ---------- Geo helpers ----------
 function collectBounds(features) {
-  let minLon = Infinity, maxLon = -Infinity;
-  let minLat = Infinity, maxLat = -Infinity;
+  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
-
   for (const f of features) {
     const elev = Number(f.properties?.elevation);
     if (!Number.isNaN(elev)) {
@@ -36,12 +53,11 @@ function collectBounds(features) {
     for (const poly of polys) {
       const ring = poly[0];
       if (!ring) continue;
-      for (const pt of ring) {
-        const lon = pt[0], lat = pt[1];
-        if (lon < minLon) minLon = lon;
-        if (lon > maxLon) maxLon = lon;
-        if (lat < minLat) minLat = lat;
-        if (lat > maxLat) maxLat = lat;
+      for (const p of ring) {
+        if (p[0] < minLon) minLon = p[0];
+        if (p[0] > maxLon) maxLon = p[0];
+        if (p[1] < minLat) minLat = p[1];
+        if (p[1] > maxLat) maxLat = p[1];
       }
     }
   }
@@ -52,162 +68,80 @@ function makeProjector(bounds) {
   const midLat = (bounds.minLat + bounds.maxLat) / 2;
   const mPerDegLat = 111320;
   const mPerDegLon = 111320 * Math.cos((midLat * Math.PI) / 180);
-  return function (lon, lat) {
-    return [
-      (lon - bounds.minLon) * mPerDegLon,
-      (lat - bounds.minLat) * mPerDegLat
-    ];
+  return {
+    project(lon, lat) {
+      return [
+        (lon - bounds.minLon) * mPerDegLon,
+        (lat - bounds.minLat) * mPerDegLat
+      ];
+    },
+    unproject(x, y) {
+      return [
+        bounds.minLon + x / mPerDegLon,
+        bounds.minLat + y / mPerDegLat
+      ];
+    }
   };
 }
 
-function colorOuter(z, minZ, maxZ) {
-  const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
-  const v = Math.floor(35 + t * 35);
-  return new THREE.Color(`rgb(\( {v}, \){v},${v + 15})`);
-}
-
-function colorMid(z, minZ, maxZ) {
-  const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
-  const r = Math.floor(40 + t * 50);
-  const g = Math.floor(55 + t * 55);
-  const b = Math.floor(80 + t * 50);
-  return new THREE.Color(`rgb(\( {r}, \){g},${b})`);
-}
-
-function colorCore(z, minZ, maxZ) {
-  const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
-  const r = Math.floor(50 + t * 170);
-  const g = Math.floor(150 + t * 70);
-  const b = Math.floor(70 - t * 30);
-  return new THREE.Color(`rgb(\( {r}, \){g},${b})`);
-}
-
-function buildLayer(features, project, zMin, zMax, colorFn, opacity) {
-  const group = new THREE.Group();
-  let count = 0;
-
-  for (const f of features) {
-    const elev = Number(f.properties?.elevation);
-    if (Number.isNaN(elev)) continue;
-
-    const geom = f.geometry;
-    if (!geom) continue;
-    const polys =
-      geom.type === "Polygon" ? [geom.coordinates] :
-      geom.type === "MultiPolygon" ? geom.coordinates : null;
-    if (!polys) continue;
-
-    const z = elev - zMin;
-    const color = colorFn(elev, zMin, zMax);
-
-    for (const poly of polys) {
-      const ring = poly[0];
-      if (!ring || ring.length < 2) continue;
-
-      const positions = new Float32Array(ring.length * 3);
-      for (let i = 0; i < ring.length; i++) {
-        const [x, y] = project(ring[i][0], ring[i][1]);
-        positions[i * 3] = x;
-        positions[i * 3 + 1] = z;
-        positions[i * 3 + 2] = y;
-      }
-
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      const material = new THREE.LineBasicMaterial({
-        color,
-        transparent: opacity < 1,
-        opacity
-      });
-      group.add(new THREE.Line(geometry, material));
-      count++;
-    }
+function surfaceColor(elev, minZ, maxZ) {
+  const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
+  let r, g, b;
+  if (t < 0.25) {
+    r = 110 + t * 40; g = 140 + t * 30; b = 70;
+  } else if (t < 0.55) {
+    r = 40 + t * 30; g = 90 + t * 40; b = 45;
+  } else if (t < 0.8) {
+    r = 90 + t * 40; g = 100 + t * 20; b = 55;
+  } else {
+    r = 130 + t * 40; g = 125 + t * 30; b = 110;
   }
-  return { group, count };
+  return new THREE.Color(`rgb(\( {r | 0}, \){g | 0},${b | 0})`);
+}
+
+function lineColor(elev, minZ, maxZ, strength) {
+  const c = surfaceColor(elev, minZ, maxZ);
+  c.offsetHSL(0, 0, strength > 0.8 ? 0.1 : -0.1);
+  return c;
 }
 
 async function loadGeoJSON(url) {
   const res = await fetch(url + "?" + Date.now());
-  if (!res.ok) throw new Error("Nepodarilo sa nacitat " + url);
+  if (!res.ok) throw new Error("Chyba nacitania " + url);
   return res.json();
 }
 
-async function init() {
-  try {
-    info.textContent = "Nacitam 3 vrstvy mapy...";
+// ---------- 3D build ----------
+let proj, zMin, zMax;
+const clickables = [];
 
-    const [outerJson, midJson, coreJson] = await Promise.all([
-      loadGeoJSON("data/contours_outer.geojson"),
-      loadGeoJSON("data/contours_bg.geojson"),
-      loadGeoJSON("data/contours.geojson")
-    ]);
-
-    const outerFeatures = outerJson.features || [];
-    const midFeatures = midJson.features || [];
-    const coreFeatures = coreJson.features || [];
-
-    const outerBounds = collectBounds(outerFeatures);
-    const midBounds = collectBounds(midFeatures);
-    const coreBounds = collectBounds(coreFeatures);
-
-    // Projekcia podľa najväčšej mapy
-    const project = makeProjector(outerBounds);
-
-    const zMin = Math.min(outerBounds.minZ, midBounds.minZ, coreBounds.minZ);
-    const zMax = Math.max(outerBounds.maxZ, midBounds.maxZ, coreBounds.maxZ);
-
-    // 1) najväčšia – veľmi tlmená
-    const outer = buildLayer(outerFeatures, project, zMin, zMax, colorOuter, 0.22);
-    scene.add(outer.group);
-
-    // 2) stredná – stredne viditeľná
-    const mid = buildLayer(midFeatures, project, zMin, zMax, colorMid, 0.45);
-    scene.add(mid.group);
-
-    // 3) jadro – najvýraznejšie
-    const core = buildLayer(coreFeatures, project, zMin, zMax, colorCore, 1.0);
-    scene.add(core.group);
-
-    // Kamera na jadro
-    const box = new THREE.Box3().setFromObject(core.group);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z, 1);
-
-    controls.target.copy(center);
-    camera.position.set(
-      center.x + maxDim * 0.95,
-      center.y + maxDim * 0.55,
-      center.z + maxDim * 0.95
-    );
-    camera.near = maxDim / 3000;
-    camera.far = maxDim * 150;
-    camera.updateProjectionMatrix();
-    controls.update();
-
-    info.textContent =
-      "Outer: " + outer.count +
-      " | Mid: " + mid.count +
-      " | Core: " + core.count +
-      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m";
-  } catch (err) {
-    console.error(err);
-    info.textContent = "CHYBA: " + err.message;
-    info.style.color = "#f87171";
+function addPolygonFill(ring, elev, project, z0, color, opacity) {
+  if (!ring || ring.length < 3) return null;
+  const shape = new THREE.Shape();
+  const [x0, y0] = project(ring[0][0], ring[0][1]);
+  shape.moveTo(x0, y0);
+  for (let i = 1; i < ring.length; i++) {
+    const [x, y] = project(ring[i][0], ring[i][1]);
+    shape.lineTo(x, y);
   }
+  const geom = new THREE.ShapeGeometry(shape);
+  geom.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshLambertMaterial({
+    color,
+    transparent: true,
+    opacity,
+    side: THREE.DoubleSide,
+    depthWrite: opacity > 0.9
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.y = elev - z0;
+  mesh.userData = { elev, type: "surface" };
+  return mesh;
 }
 
-function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-}
-
-window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-init();
-animate();
+function addContourLine(ring, elev, project, z0, color, opacity) {
+  if (!ring || ring.length < 2) return null;
+  const positions = new Float32Array(ring.length * 3);
+  for (let i = 0; i < ring.length; i++) {
+    const [x, y] = project(ring[i][0], ring[i][1]);
+    positions[i *
