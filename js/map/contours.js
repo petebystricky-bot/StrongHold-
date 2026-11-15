@@ -1,6 +1,6 @@
 // js/map/contours.js
 // Vrstevnice ako layers od najnižšej po najvyššiu
-// Zatiaľ BEZ interpolácie a BEZ geometrie (points doplníme neskôr)
+// Zatiaľ BEZ interpolácie a BEZ geometrie bodov
 
 const CONTOUR_LAYERS = [
   { elevation: 330, points: [] },
@@ -64,21 +64,20 @@ const CONTOUR_LAYERS = [
   { elevation: 620, points: [] },
   { elevation: 625, points: [] },
   { elevation: 630, points: [] },
-  { elevation: 634, points: [] } // Spišský hrad
+  { elevation: 634, points: [] }
 ];
 
-// Zatiaľ žiadna interpolácia – len nájdenie vrstvy podľa výšky
 function getContourLayerByElevation(elevation) {
   for (var i = 0; i < CONTOUR_LAYERS.length; i++) {
-    if (CONTOUR_LAYERS[i].elevation === elevation) {
-      return CONTOUR_LAYERS[i];
-    }
+    if (CONTOUR_LAYERS[i].elevation === elevation) return CONTOUR_LAYERS[i];
   }
   return null;
 }
 
 function getAllElevations() {
-  return CONTOUR_LAYERS.map(function (layer) {
-    return layer.elevation;
-  });
+  return CONTOUR_LAYERS.map(function (l) { return l.elevation; });
+}
+
+function getContourLayerCount() {
+  return CONTOUR_LAYERS.length;
 }
