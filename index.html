@@ -2,34 +2,31 @@
 <html lang="sk">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Hrad - Prototyp</title>
-  <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vrstevnice 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+    #canvas3d { display: block; width: 100%; height: 100%; }
+    #info {
+      position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.6); color: #ccc; padding: 6px 12px;
+      border-radius: 4px; font: 13px Arial; z-index: 10; pointer-events: none;
+    }
+  </style>
 </head>
 <body>
+  <div id="info">Nacitam vrstevnice...</div>
+  <canvas id="canvas3d"></canvas>
 
-  <div id="game-container">
-    <!-- Hlavná mapa -->
-    <canvas id="detailCanvas"></canvas>
-
-    <!-- Minimap -->
-    <div id="minimap-container">
-      <canvas id="overviewCanvas"></canvas>
-    </div>
-  </div>
-
-  <!-- Spodná lišta -->
-  <div id="bottom-bar">
-    <span class="slider-label">Minimap</span>
-    <input type="range" id="minimapSlider" min="0" max="100" value="72">
-  </div>
-
-  <!-- Info riadok -->
-  <div id="info">Načítavam mapu...</div>
-
-  <script src="js/map/contours.js?v=1"></script>
-  <script src="js/map/mapLoader.js?v=1"></script>
-  <script src="js/map/mapRenderer.js?v=1"></script>
-  <script src="js/main.js?v=11"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>
