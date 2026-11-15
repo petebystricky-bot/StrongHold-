@@ -5,9 +5,9 @@ const canvas = document.getElementById("canvas3d");
 const info = document.getElementById("info");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0d0d0d);
+scene.background = new THREE.Color(0x0b0b0b);
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200000);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -60,30 +60,25 @@ function makeProjector(bounds) {
   };
 }
 
-function isInside(inner, outer) {
-  return (
-    inner.minLon >= outer.minLon &&
-    inner.maxLon <= outer.maxLon &&
-    inner.minLat >= outer.minLat &&
-    inner.maxLat <= outer.maxLat
-  );
+function colorOuter(z, minZ, maxZ) {
+  const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
+  const v = Math.floor(35 + t * 35);
+  return new THREE.Color(`rgb(\( {v}, \){v},${v + 15})`);
 }
 
-function colorBg(z, minZ, maxZ) {
+function colorMid(z, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
-  // tlmené sivomodré pozadie
-  const r = Math.floor(40 + t * 40);
-  const g = Math.floor(50 + t * 50);
-  const b = Math.floor(70 + t * 60);
+  const r = Math.floor(40 + t * 50);
+  const g = Math.floor(55 + t * 55);
+  const b = Math.floor(80 + t * 50);
   return new THREE.Color(`rgb(\( {r}, \){g},${b})`);
 }
 
 function colorCore(z, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
-  // výraznejšie jadro (zeleno–žlté)
-  const r = Math.floor(40 + t * 180);
-  const g = Math.floor(140 + t * 80);
-  const b = Math.floor(80 - t * 40);
+  const r = Math.floor(50 + t * 170);
+  const g = Math.floor(150 + t * 70);
+  const b = Math.floor(70 - t * 30);
   return new THREE.Color(`rgb(\( {r}, \){g},${b})`);
 }
 
@@ -102,7 +97,7 @@ function buildLayer(features, project, zMin, zMax, colorFn, opacity) {
       geom.type === "MultiPolygon" ? geom.coordinates : null;
     if (!polys) continue;
 
-    const z = elev - zMin; // relatívna výška v metroch
+    const z = elev - zMin;
     const color = colorFn(elev, zMin, zMax);
 
     for (const poly of polys) {
@@ -139,30 +134,37 @@ async function loadGeoJSON(url) {
 
 async function init() {
   try {
-    info.textContent = "Nacitam mapy...";
+    info.textContent = "Nacitam 3 vrstvy mapy...";
 
-    const [bgJson, coreJson] = await Promise.all([
+    const [outerJson, midJson, coreJson] = await Promise.all([
+      loadGeoJSON("data/contours_outer.geojson"),
       loadGeoJSON("data/contours_bg.geojson"),
       loadGeoJSON("data/contours.geojson")
     ]);
 
-    const bgFeatures = bgJson.features || [];
+    const outerFeatures = outerJson.features || [];
+    const midFeatures = midJson.features || [];
     const coreFeatures = coreJson.features || [];
 
-    const bgBounds = collectBounds(bgFeatures);
+    const outerBounds = collectBounds(outerFeatures);
+    const midBounds = collectBounds(midFeatures);
     const coreBounds = collectBounds(coreFeatures);
-    const inside = isInside(coreBounds, bgBounds);
 
-    // Spoločná projekcia podľa veľkej mapy
-    const project = makeProjector(bgBounds);
-    const zMin = Math.min(bgBounds.minZ, coreBounds.minZ);
-    const zMax = Math.max(bgBounds.maxZ, coreBounds.maxZ);
+    // Projekcia podľa najväčšej mapy
+    const project = makeProjector(outerBounds);
 
-    // Pozadie (slabšie)
-    const bg = buildLayer(bgFeatures, project, zMin, zMax, colorBg, 0.35);
-    scene.add(bg.group);
+    const zMin = Math.min(outerBounds.minZ, midBounds.minZ, coreBounds.minZ);
+    const zMax = Math.max(outerBounds.maxZ, midBounds.maxZ, coreBounds.maxZ);
 
-    // Jadro (silnejšie)
+    // 1) najväčšia – veľmi tlmená
+    const outer = buildLayer(outerFeatures, project, zMin, zMax, colorOuter, 0.22);
+    scene.add(outer.group);
+
+    // 2) stredná – stredne viditeľná
+    const mid = buildLayer(midFeatures, project, zMin, zMax, colorMid, 0.45);
+    scene.add(mid.group);
+
+    // 3) jadro – najvýraznejšie
     const core = buildLayer(coreFeatures, project, zMin, zMax, colorCore, 1.0);
     scene.add(core.group);
 
@@ -173,17 +175,21 @@ async function init() {
     const maxDim = Math.max(size.x, size.y, size.z, 1);
 
     controls.target.copy(center);
-    camera.position.set(center.x + maxDim * 0.9, center.y + maxDim * 0.55, center.z + maxDim * 0.9);
-    camera.near = maxDim / 2000;
-    camera.far = maxDim * 100;
+    camera.position.set(
+      center.x + maxDim * 0.95,
+      center.y + maxDim * 0.55,
+      center.z + maxDim * 0.95
+    );
+    camera.near = maxDim / 3000;
+    camera.far = maxDim * 150;
     camera.updateProjectionMatrix();
     controls.update();
 
     info.textContent =
-      "BG ciar: " + bg.count +
-      " | Core ciar: " + core.count +
-      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m" +
-      " | Inside: " + (inside ? "ANO" : "NIE");
+      "Outer: " + outer.count +
+      " | Mid: " + mid.count +
+      " | Core: " + core.count +
+      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m";
   } catch (err) {
     console.error(err);
     info.textContent = "CHYBA: " + err.message;
