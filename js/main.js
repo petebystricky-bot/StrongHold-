@@ -1,161 +1,129 @@
-// js/main.js
-// Ovládanie + minimapa + spustenie mapového modulu
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-var detailCanvas = document.getElementById("detailCanvas");
-var overviewCanvas = document.getElementById("overviewCanvas");
-var infoDiv = document.getElementById("info");
-var minimapContainer = document.getElementById("minimap-container");
-var minimapSlider = document.getElementById("minimapSlider");
+const canvas = document.getElementById("canvas3d");
+const info = document.getElementById("info");
 
-var renderer = createMapRenderer(detailCanvas, overviewCanvas);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
 
-var isDragging = false;
-var lastX = 0, lastY = 0;
-var dragTarget = null;
-var dragStartX = 0, dragStartY = 0;
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  10000
+);
+camera.position.set(80, 80, 80);
 
-function updateCanvasSizes() {
-  var bar = document.getElementById("bottom-bar");
-  var barHeight = bar ? bar.offsetHeight : 48;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
 
-  detailCanvas.width = window.innerWidth;
-  detailCanvas.height = window.innerHeight - barHeight;
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
 
-  if (minimapContainer) {
-    minimapContainer.style.bottom = (barHeight + 6) + "px";
-  }
-  updateMinimapSize();
-  renderer.clampView();
+// Slabé svetlo (pri čiarach skôr pre orientáciu)
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+
+// Osy – pomocné
+scene.add(new THREE.AxesHelper(20));
+
+function elevationColor(z, minZ, maxZ) {
+  const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
+  // od modrozelenej po žltú
+  const r = Math.floor(30 + t * 180);
+  const g = Math.floor(120 + t * 80);
+  const b = Math.floor(160 - t * 120);
+  return new THREE.Color(`rgb(\( {r}, \){g},${b})`);
 }
 
-function updateMinimapSize() {
-  if (!minimapSlider) return;
-  var value = Number(minimapSlider.value);
-  var inverted = 100 - value;
-  var size = Math.floor(50 + (window.innerWidth * 0.48 - 50) * (inverted / 100));
-  overviewCanvas.width = size;
-  overviewCanvas.height = size;
+function buildContours(data) {
+  const group = new THREE.Group();
+  const minZ = data.bounds?.minZ ?? 0;
+  const maxZ = data.bounds?.maxZ ?? 1;
 
-  if (minimapContainer) {
-    if (value >= 98) minimapContainer.classList.add("hidden");
-    else minimapContainer.classList.remove("hidden");
-  }
-}
+  // Jemná horizontálna škála, aby mapa nebola obrovská/maličká
+  const minX = data.bounds?.minX ?? 0;
+  const maxX = data.bounds?.maxX ?? 1;
+  const minY = data.bounds?.minY ?? 0;
+  const maxY = data.bounds?.maxY ?? 1;
+  const span = Math.max(maxX - minX, maxY - minY, 1);
+  const scale = 100 / span;
+  const zScale = 0.15; // výška menej dramatická
 
-function startDrag(cx, cy, target) {
-  isDragging = true;
-  lastX = cx; lastY = cy;
-  dragStartX = cx; dragStartY = cy;
-  dragTarget = target;
-}
+  for (const contour of data.contours) {
+    const pts = contour.points;
+    if (!pts || pts.length < 2) continue;
 
-function moveDrag(cx, cy) {
-  if (!isDragging) return;
-  var dx = cx - lastX;
-  var dy = cy - lastY;
+    const z = (contour.elevation - minZ) * zScale;
+    const positions = new Float32Array(pts.length * 3);
 
-  if (dragTarget === "detail") renderer.pan(dx, dy);
-  else if (dragTarget === "overview") renderer.panOverview(dx, dy);
-
-  lastX = cx; lastY = cy;
-  renderer.drawAll();
-}
-
-function endDrag(cx, cy) {
-  if (dragTarget === "overview" && cx != null) {
-    if (Math.hypot(cx - dragStartX, cy - dragStartY) < 6) {
-      renderer.centerOnOverview(cx, cy);
-      renderer.drawAll();
+    for (let i = 0; i < pts.length; i++) {
+      const x = (pts[i][0] - minX) * scale;
+      const y = (pts[i][1] - minY) * scale;
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = z;      // výška = Y v Three.js
+      positions[i * 3 + 2] = y;      // mapa Y → Three Z
     }
-  }
-  isDragging = false;
-  dragTarget = null;
-}
 
-detailCanvas.addEventListener("mousedown", function (e) {
-  e.preventDefault();
-  startDrag(e.clientX, e.clientY, "detail");
-});
-detailCanvas.addEventListener("mousemove", function (e) { moveDrag(e.clientX, e.clientY); });
-detailCanvas.addEventListener("mouseup", function (e) { endDrag(e.clientX, e.clientY); });
-detailCanvas.addEventListener("mouseleave", function () { endDrag(); });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
-detailCanvas.addEventListener("touchstart", function (e) {
-  e.preventDefault();
-  startDrag(e.touches[0].clientX, e.touches[0].clientY, "detail");
-}, { passive: false });
-detailCanvas.addEventListener("touchmove", function (e) {
-  e.preventDefault();
-  moveDrag(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
-detailCanvas.addEventListener("touchend", function (e) {
-  endDrag(e.changedTouches[0] && e.changedTouches[0].clientX, e.changedTouches[0] && e.changedTouches[0].clientY);
-});
-
-overviewCanvas.addEventListener("mousedown", function (e) {
-  e.preventDefault();
-  startDrag(e.clientX, e.clientY, "overview");
-});
-overviewCanvas.addEventListener("mousemove", function (e) { moveDrag(e.clientX, e.clientY); });
-overviewCanvas.addEventListener("mouseup", function (e) { endDrag(e.clientX, e.clientY); });
-overviewCanvas.addEventListener("mouseleave", function () { endDrag(); });
-
-overviewCanvas.addEventListener("touchstart", function (e) {
-  e.preventDefault();
-  startDrag(e.touches[0].clientX, e.touches[0].clientY, "overview");
-}, { passive: false });
-overviewCanvas.addEventListener("touchmove", function (e) {
-  e.preventDefault();
-  moveDrag(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
-overviewCanvas.addEventListener("touchend", function (e) {
-  endDrag(e.changedTouches[0] && e.changedTouches[0].clientX, e.changedTouches[0] && e.changedTouches[0].clientY);
-});
-
-if (minimapSlider) {
-  minimapSlider.addEventListener("input", function () {
-    updateMinimapSize();
-    renderer.drawAll();
-  });
-}
-
-window.addEventListener("resize", function () {
-  updateCanvasSizes();
-  renderer.drawAll();
-});
-
-function init() {
-  if (infoDiv) infoDiv.textContent = "Nacitam topo mapu...";
-
-  updateCanvasSizes();
-  if (minimapSlider) minimapSlider.value = 72;
-  updateMinimapSize();
-
-  loadTopoMap("data/topo_map.png")
-    .then(function (topo) {
-      renderer.setTopo(topo);
-      renderer.fitToWidth();
-      renderer.drawAll();
-
-      var count = getContourLayerCount();
-      var elevs = getAllElevations();
-      var minE = elevs[0];
-      var maxE = elevs[elevs.length - 1];
-
-      if (infoDiv) {
-        infoDiv.textContent =
-          "Topo " + topo.width + "x" + topo.height +
-          " | Vrstvy: " + count +
-          " (" + minE + "–" + maxE + " m) | Bez interpolacie";
-        infoDiv.style.color = "#bbb";
-      }
-    })
-    .catch(function (err) {
-      if (infoDiv) {
-        infoDiv.textContent = "CHYBA: " + (err.message || String(err));
-        infoDiv.style.color = "#f87171";
-      }
+    const material = new THREE.LineBasicMaterial({
+      color: elevationColor(contour.elevation, minZ, maxZ)
     });
+
+    const line = new THREE.Line(geometry, material);
+    group.add(line);
+  }
+
+  return group;
 }
+
+async function init() {
+  try {
+    const res = await fetch("data/contours.json?" + Date.now());
+    if (!res.ok) throw new Error("Nepodarilo sa nacitat data/contours.json");
+    const data = await res.json();
+
+    const group = buildContours(data);
+    scene.add(group);
+
+    // Vycentruj kameru na obsah
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 1);
+
+    controls.target.copy(center);
+    camera.position.set(
+      center.x + maxDim * 0.9,
+      center.y + maxDim * 0.7,
+      center.z + maxDim * 0.9
+    );
+    controls.update();
+
+    info.textContent =
+      "Vrstevnice: " + data.contours.length +
+      " | " + (data.bounds?.minZ ?? "?") + "–" + (data.bounds?.maxZ ?? "?") + " m" +
+      " | Otoc / zoom mysou";
+  } catch (err) {
+    info.textContent = "CHYBA: " + err.message;
+    info.style.color = "#f87171";
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
 init();
+animate();
