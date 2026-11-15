@@ -1,34 +1,18 @@
-// ======================
-// Jednoduchá zelená mapa + minimapa
-// ======================
+// js/main.js
+// Ovládanie + minimapa + spustenie mapového modulu
 
 var detailCanvas = document.getElementById("detailCanvas");
 var overviewCanvas = document.getElementById("overviewCanvas");
-var detailCtx = detailCanvas.getContext("2d");
-var overviewCtx = overviewCanvas.getContext("2d");
 var infoDiv = document.getElementById("info");
 var minimapContainer = document.getElementById("minimap-container");
 var minimapSlider = document.getElementById("minimapSlider");
 
-// Veľkosť mapy v políčkach
-var mapWidth = 12;
-var mapHeight = 16;
-
-// Koľko políčok vidíme naraz
-var viewWidth = 6;
-var viewHeight = 8;
-var viewX = 0;
-var viewY = 0;
+var renderer = createMapRenderer(detailCanvas, overviewCanvas);
 
 var isDragging = false;
 var lastX = 0, lastY = 0;
 var dragTarget = null;
 var dragStartX = 0, dragStartY = 0;
-
-// Jedna zelená farba (čisté štvorce)
-var TILE_COLOR = "#3d8c40";
-var TILE_BORDER = "rgba(0,0,0,0.25)";
-var EMPTY_COLOR = "#111";
 
 function updateCanvasSizes() {
   var bar = document.getElementById("bottom-bar");
@@ -40,21 +24,8 @@ function updateCanvasSizes() {
   if (minimapContainer) {
     minimapContainer.style.bottom = (barHeight + 6) + "px";
   }
-
-  // Počet viditeľných políčok podľa pomeru strán
-  var aspect = detailCanvas.width / detailCanvas.height;
-  if (aspect >= 1) {
-    viewHeight = 8;
-    viewWidth = Math.max(6, Math.round(viewHeight * aspect));
-  } else {
-    viewWidth = 6;
-    viewHeight = Math.max(8, Math.round(viewWidth / aspect));
-  }
-  viewWidth = Math.min(viewWidth, mapWidth);
-  viewHeight = Math.min(viewHeight, mapHeight);
-
   updateMinimapSize();
-  clampView();
+  renderer.clampView();
 }
 
 function updateMinimapSize() {
@@ -71,83 +42,10 @@ function updateMinimapSize() {
   }
 }
 
-function clampView() {
-  viewX = Math.max(0, Math.min(mapWidth - viewWidth, viewX));
-  viewY = Math.max(0, Math.min(mapHeight - viewHeight, viewY));
-}
-
-function drawAll() {
-  drawDetail();
-  drawOverview();
-}
-
-function drawDetail() {
-  var w = detailCanvas.width;
-  var h = detailCanvas.height;
-  detailCtx.clearRect(0, 0, w, h);
-
-  var tileW = w / viewWidth;
-  var tileH = h / viewHeight;
-
-  var startX = Math.floor(viewX);
-  var startY = Math.floor(viewY);
-  var offX = (viewX - startX) * tileW;
-  var offY = (viewY - startY) * tileH;
-
-  for (var y = 0; y <= viewHeight; y++) {
-    for (var x = 0; x <= viewWidth; x++) {
-      var mx = startX + x;
-      var my = startY + y;
-      var sx = x * tileW - offX;
-      var sy = y * tileH - offY;
-
-      if (mx < 0 || mx >= mapWidth || my < 0 || my >= mapHeight) {
-        detailCtx.fillStyle = EMPTY_COLOR;
-        detailCtx.fillRect(sx, sy, tileW + 1, tileH + 1);
-        continue;
-      }
-
-      detailCtx.fillStyle = TILE_COLOR;
-      detailCtx.fillRect(sx, sy, tileW + 1, tileH + 1);
-
-      detailCtx.strokeStyle = TILE_BORDER;
-      detailCtx.strokeRect(sx, sy, tileW, tileH);
-    }
-  }
-}
-
-function drawOverview() {
-  var w = overviewCanvas.width;
-  var h = overviewCanvas.height;
-  overviewCtx.clearRect(0, 0, w, h);
-
-  var scaleX = w / mapWidth;
-  var scaleY = h / mapHeight;
-
-  for (var y = 0; y < mapHeight; y++) {
-    for (var x = 0; x < mapWidth; x++) {
-      overviewCtx.fillStyle = TILE_COLOR;
-      overviewCtx.fillRect(x * scaleX, y * scaleY, scaleX + 0.5, scaleY + 0.5);
-    }
-  }
-
-  // Zelený rámček – aktuálny pohľad
-  overviewCtx.strokeStyle = "#22c55e";
-  overviewCtx.lineWidth = 2;
-  overviewCtx.strokeRect(
-    viewX * scaleX,
-    viewY * scaleY,
-    viewWidth * scaleX,
-    viewHeight * scaleY
-  );
-}
-
 function startDrag(cx, cy, target) {
   isDragging = true;
-  lastX = cx;
-  lastY = cy;
-  dragStartX = cx;
-  dragStartY = cy;
+  lastX = cx; lastY = cy;
+  dragStartX = cx; dragStartY = cy;
   dragTarget = target;
 }
 
@@ -156,112 +54,108 @@ function moveDrag(cx, cy) {
   var dx = cx - lastX;
   var dy = cy - lastY;
 
-  if (dragTarget === "detail") {
-    var tileW = detailCanvas.width / viewWidth;
-    var tileH = detailCanvas.height / viewHeight;
-    viewX -= dx / tileW;
-    viewY -= dy / tileH;
-  } else if (dragTarget === "overview") {
-    var scaleX = overviewCanvas.width / mapWidth;
-    var scaleY = overviewCanvas.height / mapHeight;
-    viewX -= dx / scaleX;
-    viewY -= dy / scaleY;
-  }
+  if (dragTarget === "detail") renderer.pan(dx, dy);
+  else if (dragTarget === "overview") renderer.panOverview(dx, dy);
 
-  clampView();
-  lastX = cx;
-  lastY = cy;
-  drawAll();
+  lastX = cx; lastY = cy;
+  renderer.drawAll();
 }
 
 function endDrag(cx, cy) {
   if (dragTarget === "overview" && cx != null) {
     if (Math.hypot(cx - dragStartX, cy - dragStartY) < 6) {
-      handleMinimapClick(cx, cy);
+      renderer.centerOnOverview(cx, cy);
+      renderer.drawAll();
     }
   }
   isDragging = false;
   dragTarget = null;
 }
 
-function handleMinimapClick(cx, cy) {
-  var rect = overviewCanvas.getBoundingClientRect();
-  var mx = cx - rect.left;
-  var my = cy - rect.top;
-  var scaleX = overviewCanvas.width / mapWidth;
-  var scaleY = overviewCanvas.height / mapHeight;
-
-  viewX = mx / scaleX - viewWidth / 2;
-  viewY = my / scaleY - viewHeight / 2;
-  clampView();
-  drawAll();
-}
-
-// Udalosti
-detailCanvas.addEventListener("mousedown", function(e) {
+detailCanvas.addEventListener("mousedown", function (e) {
   e.preventDefault();
   startDrag(e.clientX, e.clientY, "detail");
 });
-detailCanvas.addEventListener("mousemove", function(e) { moveDrag(e.clientX, e.clientY); });
-detailCanvas.addEventListener("mouseup", function(e) { endDrag(e.clientX, e.clientY); });
-detailCanvas.addEventListener("mouseleave", function() { endDrag(); });
+detailCanvas.addEventListener("mousemove", function (e) { moveDrag(e.clientX, e.clientY); });
+detailCanvas.addEventListener("mouseup", function (e) { endDrag(e.clientX, e.clientY); });
+detailCanvas.addEventListener("mouseleave", function () { endDrag(); });
 
-detailCanvas.addEventListener("touchstart", function(e) {
+detailCanvas.addEventListener("touchstart", function (e) {
   e.preventDefault();
   startDrag(e.touches[0].clientX, e.touches[0].clientY, "detail");
 }, { passive: false });
-detailCanvas.addEventListener("touchmove", function(e) {
+detailCanvas.addEventListener("touchmove", function (e) {
   e.preventDefault();
   moveDrag(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
-detailCanvas.addEventListener("touchend", function(e) {
+detailCanvas.addEventListener("touchend", function (e) {
   endDrag(e.changedTouches[0] && e.changedTouches[0].clientX, e.changedTouches[0] && e.changedTouches[0].clientY);
 });
 
-overviewCanvas.addEventListener("mousedown", function(e) {
+overviewCanvas.addEventListener("mousedown", function (e) {
   e.preventDefault();
   startDrag(e.clientX, e.clientY, "overview");
 });
-overviewCanvas.addEventListener("mousemove", function(e) { moveDrag(e.clientX, e.clientY); });
-overviewCanvas.addEventListener("mouseup", function(e) { endDrag(e.clientX, e.clientY); });
-overviewCanvas.addEventListener("mouseleave", function() { endDrag(); });
+overviewCanvas.addEventListener("mousemove", function (e) { moveDrag(e.clientX, e.clientY); });
+overviewCanvas.addEventListener("mouseup", function (e) { endDrag(e.clientX, e.clientY); });
+overviewCanvas.addEventListener("mouseleave", function () { endDrag(); });
 
-overviewCanvas.addEventListener("touchstart", function(e) {
+overviewCanvas.addEventListener("touchstart", function (e) {
   e.preventDefault();
   startDrag(e.touches[0].clientX, e.touches[0].clientY, "overview");
 }, { passive: false });
-overviewCanvas.addEventListener("touchmove", function(e) {
+overviewCanvas.addEventListener("touchmove", function (e) {
   e.preventDefault();
   moveDrag(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
-overviewCanvas.addEventListener("touchend", function(e) {
+overviewCanvas.addEventListener("touchend", function (e) {
   endDrag(e.changedTouches[0] && e.changedTouches[0].clientX, e.changedTouches[0] && e.changedTouches[0].clientY);
 });
 
 if (minimapSlider) {
-  minimapSlider.addEventListener("input", function() {
+  minimapSlider.addEventListener("input", function () {
     updateMinimapSize();
-    drawAll();
+    renderer.drawAll();
   });
 }
 
-window.addEventListener("resize", function() {
+window.addEventListener("resize", function () {
   updateCanvasSizes();
-  drawAll();
+  renderer.drawAll();
 });
 
-// Štart
 function init() {
-  if (minimapSlider) minimapSlider.value = 72;
+  if (infoDiv) infoDiv.textContent = "Nacitam topo mapu...";
+
   updateCanvasSizes();
-  viewX = (mapWidth - viewWidth) / 2;
-  viewY = (mapHeight - viewHeight) / 2;
-  clampView();
-  drawAll();
-  if (infoDiv) {
-    infoDiv.textContent = "Zaklad: zelene stvorce 12x16 | Minimap + ovladanie";
-    infoDiv.style.color = "#bbb";
-  }
+  if (minimapSlider) minimapSlider.value = 72;
+  updateMinimapSize();
+
+  loadTopoMap("data/topo_map.png")
+    .then(function (topo) {
+      renderer.setTopo(topo);
+      renderer.fitToWidth();
+      renderer.drawAll();
+
+      var count = getContourLayerCount();
+      var elevs = getAllElevations();
+      var minE = elevs[0];
+      var maxE = elevs[elevs.length - 1];
+
+      if (infoDiv) {
+        infoDiv.textContent =
+          "Topo " + topo.width + "x" + topo.height +
+          " | Vrstvy: " + count +
+          " (" + minE + "–" + maxE + " m) | Bez interpolacie";
+        infoDiv.style.color = "#bbb";
+      }
+    })
+    .catch(function (err) {
+      if (infoDiv) {
+        infoDiv.textContent = "CHYBA: " + (err.message || String(err));
+        infoDiv.style.color = "#f87171";
+      }
+    });
 }
 
 init();
