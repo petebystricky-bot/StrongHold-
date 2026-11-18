@@ -140,7 +140,7 @@ function buildLineLayer(features, project, zMin, zMax, colorFn, opacity) {
   return { group, count };
 }
 
-// CORE: čiary + výplne
+// CORE: čiary + výplne (opravené zrkadlenie)
 function buildCoreLayer(features, project, zMin, zMax) {
   const group = new THREE.Group();
   let lines = 0;
@@ -169,10 +169,11 @@ function buildCoreLayer(features, project, zMin, zMax) {
       if (ring.length >= 3) {
         const shape = new THREE.Shape();
         const [x0, y0] = project(ring[0][0], ring[0][1]);
-        shape.moveTo(x0, y0);
+        // -y kvôli rotateX(-PI/2), aby sedelo so čiarami
+        shape.moveTo(x0, -y0);
         for (let i = 1; i < ring.length; i++) {
           const [x, y] = project(ring[i][0], ring[i][1]);
-          shape.lineTo(x, y);
+          shape.lineTo(x, -y);
         }
         const shapeGeom = new THREE.ShapeGeometry(shape);
         shapeGeom.rotateX(-Math.PI / 2);
