@@ -21,12 +21,20 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enablePan = true;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-const sun = new THREE.DirectionalLight(0xfff5e0, 0.5);
-sun.position.set(100, 200, 80);
+scene.add(new THREE.AmbientLight(0xffffff, 0.95));
+const sun = new THREE.DirectionalLight(0xffffff, 0.4);
+sun.position.set(80, 150, 60);
 scene.add(sun);
 
-// ---------- helpers ----------
+// ---------- 2 farby ----------
+const COLOR_LOW = new THREE.Color("#2d6a3e");   // najnižšia
+const COLOR_HIGH = new THREE.Color("#c4b59a");  // najvyššia
+
+function colorByElevation(elev, minZ, maxZ) {
+  const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
+  return COLOR_LOW.clone().lerp(COLOR_HIGH, t);
+}
+
 function collectBounds(features) {
   let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
@@ -68,35 +76,6 @@ function makeProjector(bounds) {
   };
 }
 
-// farby inšpirované satelitom stredného SK
-function surfaceColor(elev, minZ, maxZ) {
-  const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
-  let r, g, b;
-  if (t < 0.2) {
-    // údolia / lúky
-    r = 100 + t * 50; g = 130 + t * 40; b = 60;
-  } else if (t < 0.45) {
-    // polia / nízky les
-    r = 70 + t * 40; g = 110 + t * 35; b = 50;
-  } else if (t < 0.7) {
-    // hustý les
-    r = 35 + t * 25; g = 85 + t * 30; b = 40;
-  } else if (t < 0.88) {
-    // vyššie svahy
-    r = 95 + t * 35; g = 100 + t * 20; b = 55;
-  } else {
-    // skala / hole
-    r = 140 + t * 30; g = 135 + t * 25; b = 120;
-  }
-  return new THREE.Color(`rgb(\( {r | 0}, \){g | 0},${b | 0})`);
-}
-
-function lineColor(elev, minZ, maxZ) {
-  const c = surfaceColor(elev, minZ, maxZ);
-  c.offsetHSL(0, 0, -0.15);
-  return c;
-}
-
 async function loadGeoJSON(url) {
   const res = await fetch(url + "?" + Date.now());
   if (!res.ok) throw new Error("Chyba nacitania " + url);
@@ -114,38 +93,34 @@ function addFill(ring, elev, project, z0, color, opacity) {
   }
   const geom = new THREE.ShapeGeometry(shape);
   geom.rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshLambertMaterial({
+  const mat = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
     opacity,
     side: THREE.DoubleSide,
-    depthWrite: opacity > 0.85
+    depthWrite: false
   });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.y = elev - z0;
   return mesh;
 }
 
-function addLine(ring, elev, project, z0, color, opacity) {
+function addLine(ring, elev, project, z0, color) {
   if (!ring || ring.length < 2) return null;
   const positions = new Float32Array(ring.length * 3);
   for (let i = 0; i < ring.length; i++) {
     const [x, y] = project(ring[i][0], ring[i][1]);
     positions[i * 3] = x;
-    positions[i * 3 + 1] = elev - z0;
+    positions[i * 3 + 1] = elev - z0 + 0.3;
     positions[i * 3 + 2] = y;
   }
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.LineBasicMaterial({
-    color,
-    transparent: opacity < 1,
-    opacity
-  });
+  const mat = new THREE.LineBasicMaterial({ color, linewidth: 1 });
   return new THREE.Line(geom, mat);
 }
 
-function buildLayer(features, project, z0, zMin, zMax, opts) {
+function buildLayer(features, project, z0, zMin, zMax, fillOpacity) {
   const group = new THREE.Group();
   let fills = 0, lines = 0;
   for (const f of features) {
@@ -158,33 +133,21 @@ function buildLayer(features, project, z0, zMin, zMax, opts) {
       geom.type === "MultiPolygon" ? geom.coordinates : null;
     if (!polys) continue;
 
+    const col = colorByElevation(elev, zMin, zMax);
     for (const poly of polys) {
       const ring = poly[0];
-      if (opts.fill) {
-        const mesh = addFill(
-          ring, elev, project, z0,
-          surfaceColor(elev, zMin, zMax),
-          opts.fillOpacity
-        );
-        if (mesh) { group.add(mesh); fills++; }
-      }
-      if (opts.lines) {
-        const line = addLine(
-          ring, elev, project, z0,
-          lineColor(elev, zMin, zMax),
-          opts.lineOpacity
-        );
-        if (line) { group.add(line); lines++; }
-      }
+      const mesh = addFill(ring, elev, project, z0, col, fillOpacity);
+      if (mesh) { group.add(mesh); fills++; }
+      const line = addLine(ring, elev, project, z0, col.clone().offsetHSL(0, 0, -0.25));
+      if (line) { group.add(line); lines++; }
     }
   }
   return { group, fills, lines };
 }
 
-// ---------- init ----------
 async function init() {
   try {
-    info.textContent = "Nacitam 3 vrstvy + vyplne...";
+    info.textContent = "Nacitam vrstvy...";
     const [outerJson, midJson, coreJson] = await Promise.all([
       loadGeoJSON("data/contours_outer.geojson"),
       loadGeoJSON("data/contours_bg.geojson"),
@@ -195,51 +158,39 @@ async function init() {
     const midF = midJson.features || [];
     const coreF = coreJson.features || [];
 
-    const outerBounds = collectBounds(outerF);
-    const midBounds = collectBounds(midF);
-    const coreBounds = collectBounds(coreF);
+    const bOuter = collectBounds(outerF);
+    const bMid = collectBounds(midF);
+    const bCore = collectBounds(coreF);
 
-    const zMin = Math.min(outerBounds.minZ, midBounds.minZ, coreBounds.minZ);
-    const zMax = Math.max(outerBounds.maxZ, midBounds.maxZ, coreBounds.maxZ);
+    const zMin = Math.min(bOuter.minZ, bMid.minZ, bCore.minZ);
+    const zMax = Math.max(bOuter.maxZ, bMid.maxZ, bCore.maxZ);
 
-    // projekcia podľa outer (najväčšia mapa)
-    const project = makeProjector(outerBounds);
+    const project = makeProjector(bOuter);
 
-    // Outer – slabá výplň
-    const outer = buildLayer(outerF, project, zMin, zMin, zMax, {
-      fill: true, fillOpacity: 0.22,
-      lines: true, lineOpacity: 0.3
-    });
+    // Outer slabšie, core najvýraznejšie
+    const outer = buildLayer(outerF, project, zMin, zMin, zMax, 0.35);
     scene.add(outer.group);
 
-    // Mid – stredná výplň
-    const mid = buildLayer(midF, project, zMin, zMin, zMax, {
-      fill: true, fillOpacity: 0.4,
-      lines: true, lineOpacity: 0.5
-    });
+    const mid = buildLayer(midF, project, zMin, zMin, zMax, 0.55);
     scene.add(mid.group);
 
-    // Core – silnejšia výplň
-    const core = buildLayer(coreF, project, zMin, zMin, zMax, {
-      fill: true, fillOpacity: 0.75,
-      lines: true, lineOpacity: 1.0
-    });
+    const core = buildLayer(coreF, project, zMin, zMin, zMax, 0.85);
     scene.add(core.group);
 
-    // kamera na core
     const box = new THREE.Box3().setFromObject(core.group);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.z, 1);
     controls.target.copy(center);
-    camera.position.set(center.x, center.y + maxDim * 0.85, center.z + maxDim * 0.4);
+    camera.position.set(center.x, center.y + maxDim * 0.9, center.z + maxDim * 0.35);
     camera.near = maxDim / 5000;
     camera.far = maxDim * 200;
     camera.updateProjectionMatrix();
     controls.update();
 
     info.textContent =
-      `Outer F\( {outer.fills}/L \){outer.lines} | Mid F\( {mid.fills}/L \){mid.lines} | Core F\( {core.fills}/L \){core.lines} | Z \( {Math.round(zMin)}– \){Math.round(zMax)} m`;
+      `Z \( {Math.round(zMin)}– \){Math.round(zMax)} m | ` +
+      `Outer ${outer.fills} | Mid ${mid.fills} | Core ${core.fills}`;
   } catch (err) {
     console.error(err);
     info.textContent = "CHYBA: " + err.message;
