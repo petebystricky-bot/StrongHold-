@@ -26,8 +26,7 @@ scene.add(sun);
 
 const COLOR_LOW = new THREE.Color("#2d6a3e");
 const COLOR_HIGH = new THREE.Color("#8b6914");
-const COLOR_WATER = new THREE.Color("#1a5f8a");
-const COLOR_WATER_LINE = new THREE.Color("#3a9fd4");
+const COLOR_WATER = new THREE.Color("#1a6a9a");
 
 function colorByElevation(elev, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
@@ -78,9 +77,7 @@ function makeProjector(bounds) {
   }
 
   function unproject(x, y) {
-    const lon = x / mPerDegLon + bounds.minLon;
-    const lat = y / mPerDegLat + bounds.minLat;
-    return [lon, lat];
+    return [x / mPerDegLon + bounds.minLon, y / mPerDegLat + bounds.minLat];
   }
 
   return { project, unproject };
@@ -175,9 +172,115 @@ function collectSamples(features, project, stride = 3) {
   return samples;
 }
 
-function buildHeightmapIDW(samples, boundsXY, cols, rows, k = 6, power = 2) {
+// ---------- voda: point-in-polygon + vzdialenosť k línii ----------
+
+function pointInRing(lon, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    const intersect =
+      yi > lat !== yj > lat &&
+      lon < ((xj - xi) * (lat - yi)) / (yj - yi + 1e-15) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function distToSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** Pripraví vodné polygóny (lon/lat) a línie v metroch */
+function buildWaterIndex(riverFeatures, project, coreBounds) {
+  const polygons = []; // rings in lon/lat
+  const linesM = []; // arrays of {x,y} in meters
+
+  const pad = 0.003;
+  function nearCore(lon, lat) {
+    return (
+      lon >= coreBounds.minLon - pad &&
+      lon <= coreBounds.maxLon + pad &&
+      lat >= coreBounds.minLat - pad &&
+      lat <= coreBounds.maxLat + pad
+    );
+  }
+
+  for (const f of riverFeatures) {
+    const g = f.geometry;
+    if (!g) continue;
+
+    if (g.type === "Polygon") {
+      const ring = g.coordinates[0];
+      if (ring && ring.some((c) => nearCore(c[0], c[1]))) polygons.push(ring);
+    } else if (g.type === "MultiPolygon") {
+      for (const poly of g.coordinates) {
+        const ring = poly[0];
+        if (ring && ring.some((c) => nearCore(c[0], c[1]))) polygons.push(ring);
+      }
+    } else if (g.type === "LineString") {
+      const pts = [];
+      for (const c of g.coordinates) {
+        if (!nearCore(c[0], c[1])) continue;
+        const [x, y] = project(c[0], c[1]);
+        pts.push({ x, y });
+      }
+      if (pts.length >= 2) linesM.push(pts);
+    } else if (g.type === "MultiLineString") {
+      for (const line of g.coordinates) {
+        const pts = [];
+        for (const c of line) {
+          if (!nearCore(c[0], c[1])) continue;
+          const [x, y] = project(c[0], c[1]);
+          pts.push({ x, y });
+        }
+        if (pts.length >= 2) linesM.push(pts);
+      }
+    }
+  }
+
+  // šírka koryta pre línie (metre) – Váh \~30–50 m, berieme polomer
+  const LINE_HALF_WIDTH = 35;
+
+  function isWater(lon, lat, x, y) {
+    for (const ring of polygons) {
+      if (pointInRing(lon, lat, ring)) return true;
+    }
+    for (const line of linesM) {
+      for (let i = 0; i < line.length - 1; i++) {
+        const d = distToSeg(x, y, line[i].x, line[i].y, line[i + 1].x, line[i + 1].y);
+        if (d <= LINE_HALF_WIDTH) return true;
+      }
+    }
+    return false;
+  }
+
+  return { isWater, polyCount: polygons.length, lineCount: linesM.length };
+}
+
+/**
+ * Heightmap: IDW z vrstevníc, potom bunky vo vode
+ * → dno koryta (nižšia výška) + flag water
+ */
+function buildHeightmapWithRiver(
+  samples,
+  boundsXY,
+  cols,
+  rows,
+  waterIndex,
+  unproject,
+  k = 6,
+  power = 2
+) {
   const { minX, maxX, minY, maxY } = boundsXY;
   const heights = new Float32Array(cols * rows);
+  const water = new Uint8Array(cols * rows);
 
   const cellSize = Math.max(maxX - minX, maxY - minY) / 32;
   const grid = new Map();
@@ -204,20 +307,17 @@ function buildHeightmapIDW(samples, boundsXY, cols, rows, k = 6, power = 2) {
     return out.length ? out : samples;
   }
 
-  let hMin = Infinity;
-  let hMax = -Infinity;
-
+  // 1) IDW všade
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
       const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
 
       const candidates = nearby(x, y);
-      const dists = [];
-      for (const s of candidates) {
-        const d = Math.hypot(s.x - x, s.y - y) + 1e-6;
-        dists.push({ s, d });
-      }
+      const dists = candidates.map((s) => ({
+        s,
+        d: Math.hypot(s.x - x, s.y - y) + 1e-6
+      }));
       dists.sort((a, b) => a.d - b.d);
       const nearest = dists.slice(0, Math.min(k, dists.length));
 
@@ -228,41 +328,48 @@ function buildHeightmapIDW(samples, boundsXY, cols, rows, k = 6, power = 2) {
         wSum += w;
         zSum += w * s.z;
       }
-      const h = zSum / wSum;
-      heights[j * cols + i] = h;
+      heights[j * cols + i] = zSum / wSum;
+    }
+  }
+
+  // 2) voda: označ + prehĺb koryto
+  // dno = lokálne nižšie o CHANNEL_DEPTH, aspoň o niečo pod okolím
+  const CHANNEL_DEPTH = 4; // metre
+  let waterCells = 0;
+  let hMin = Infinity;
+  let hMax = -Infinity;
+
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
+      const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
+      const [lon, lat] = unproject(x, y);
+
+      if (waterIndex.isWater(lon, lat, x, y)) {
+        water[j * cols + i] = 1;
+        heights[j * cols + i] -= CHANNEL_DEPTH;
+        waterCells++;
+      }
+
+      const h = heights[j * cols + i];
       if (h < hMin) hMin = h;
       if (h > hMax) hMax = h;
     }
   }
 
-  return { heights, cols, rows, minX, maxX, minY, maxY, hMin, hMax };
-}
-
-function sampleHeight(heightmap, x, y, zMin) {
-  const { heights, cols, rows, minX, maxX, minY, maxY } = heightmap;
-  const u = (x - minX) / Math.max(maxX - minX, 1e-6);
-  const v = (y - minY) / Math.max(maxY - minY, 1e-6);
-  if (u < 0 || u > 1 || v < 0 || v > 1) {
-    return 0; // mimo CORE – plochá nízka voda
-  }
-  const fx = u * (cols - 1);
-  const fy = v * (rows - 1);
-  const i0 = Math.floor(fx);
-  const j0 = Math.floor(fy);
-  const i1 = Math.min(i0 + 1, cols - 1);
-  const j1 = Math.min(j0 + 1, rows - 1);
-  const tx = fx - i0;
-  const ty = fy - j0;
-  const h00 = heights[j0 * cols + i0];
-  const h10 = heights[j0 * cols + i1];
-  const h01 = heights[j1 * cols + i0];
-  const h11 = heights[j1 * cols + i1];
-  const h =
-    h00 * (1 - tx) * (1 - ty) +
-    h10 * tx * (1 - ty) +
-    h01 * (1 - tx) * ty +
-    h11 * tx * ty;
-  return h - zMin;
+  return {
+    heights,
+    water,
+    cols,
+    rows,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    hMin,
+    hMax,
+    waterCells
+  };
 }
 
 function showHeightmapPreview(heightmap) {
@@ -276,7 +383,7 @@ function showHeightmapPreview(heightmap) {
     document.body.appendChild(preview);
   }
 
-  const { heights, cols, rows, hMin, hMax } = heightmap;
+  const { heights, water, cols, rows, hMin, hMax } = heightmap;
   const maxPx = 160;
   const aspect = cols / Math.max(rows, 1);
   let w, h;
@@ -296,15 +403,19 @@ function showHeightmapPreview(heightmap) {
   const img = ctx.createImageData(cols, rows);
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
+      const idx = ((rows - 1 - j) * cols + i) * 4;
+      if (water && water[j * cols + i]) {
+        img.data[idx] = 30;
+        img.data[idx + 1] = 100;
+        img.data[idx + 2] = 160;
+        img.data[idx + 3] = 255;
+        continue;
+      }
       const val = heights[j * cols + i];
       const t = hMax === hMin ? 0.5 : (val - hMin) / (hMax - hMin);
-      const r = Math.floor(45 + t * 140);
-      const g = Math.floor(110 - t * 40);
-      const b = Math.floor(50 - t * 20);
-      const idx = ((rows - 1 - j) * cols + i) * 4;
-      img.data[idx] = r;
-      img.data[idx + 1] = g;
-      img.data[idx + 2] = b;
+      img.data[idx] = Math.floor(45 + t * 140);
+      img.data[idx + 1] = Math.floor(110 - t * 40);
+      img.data[idx + 2] = Math.floor(50 - t * 20);
       img.data[idx + 3] = 255;
     }
   }
@@ -312,7 +423,7 @@ function showHeightmapPreview(heightmap) {
 }
 
 function buildTerrainMesh(heightmap, zMin, zMax) {
-  const { heights, cols, rows, minX, maxX, minY, maxY } = heightmap;
+  const { heights, water, cols, rows, minX, maxX, minY, maxY } = heightmap;
   const width = maxX - minX;
   const depth = maxY - minY;
 
@@ -327,10 +438,17 @@ function buildTerrainMesh(heightmap, zMin, zMax) {
       const i = iy * cols + ix;
       const h = heights[iy * cols + ix];
       pos.setY(i, h - zMin);
-      const c = colorByElevation(h, zMin, zMax);
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
+
+      if (water && water[iy * cols + ix]) {
+        colors[i * 3] = COLOR_WATER.r;
+        colors[i * 3 + 1] = COLOR_WATER.g;
+        colors[i * 3 + 2] = COLOR_WATER.b;
+      } else {
+        const c = colorByElevation(h, zMin, zMax);
+        colors[i * 3] = c.r;
+        colors[i * 3 + 1] = c.g;
+        colors[i * 3 + 2] = c.b;
+      }
     }
   }
 
@@ -347,86 +465,6 @@ function buildTerrainMesh(heightmap, zMin, zMax) {
   return mesh;
 }
 
-/** Rieka / voda z GeoJSON */
-function buildRiverLayer(features, project, heightmap, zMin) {
-  const group = new THREE.Group();
-  let polys = 0;
-  let lines = 0;
-  const Y_OFFSET = 1.5; // mierne nad terénom, aby nepreblikávalo
-
-  function addWaterPolygon(ring) {
-    if (!ring || ring.length < 3) return;
-    const shape = new THREE.Shape();
-    const [x0, y0] = project(ring[0][0], ring[0][1]);
-    shape.moveTo(x0, -y0);
-    for (let i = 1; i < ring.length; i++) {
-      const [x, y] = project(ring[i][0], ring[i][1]);
-      shape.lineTo(x, -y);
-    }
-    const geom = new THREE.ShapeGeometry(shape);
-    geom.rotateX(-Math.PI / 2);
-
-    // výška = priemer výšok ringov na teréne
-    let sum = 0;
-    let n = 0;
-    for (let i = 0; i < ring.length; i += Math.max(1, Math.floor(ring.length / 12))) {
-      const [x, y] = project(ring[i][0], ring[i][1]);
-      sum += sampleHeight(heightmap, x, y, zMin);
-      n++;
-    }
-    const baseY = (n ? sum / n : 0) + Y_OFFSET;
-
-    const mat = new THREE.MeshBasicMaterial({
-      color: COLOR_WATER,
-      transparent: true,
-      opacity: 0.75,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.position.y = baseY;
-    group.add(mesh);
-    polys++;
-  }
-
-  function addWaterLine(coords) {
-    if (!coords || coords.length < 2) return;
-    const positions = new Float32Array(coords.length * 3);
-    for (let i = 0; i < coords.length; i++) {
-      const [x, y] = project(coords[i][0], coords[i][1]);
-      const hy = sampleHeight(heightmap, x, y, zMin) + Y_OFFSET;
-      positions[i * 3] = x;
-      positions[i * 3 + 1] = hy;
-      positions[i * 3 + 2] = y;
-    }
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: COLOR_WATER_LINE,
-      linewidth: 2
-    });
-    group.add(new THREE.Line(geom, mat));
-    lines++;
-  }
-
-  for (const f of features) {
-    const geom = f.geometry;
-    if (!geom) continue;
-
-    if (geom.type === "Polygon") {
-      addWaterPolygon(geom.coordinates[0]);
-    } else if (geom.type === "MultiPolygon") {
-      for (const poly of geom.coordinates) addWaterPolygon(poly[0]);
-    } else if (geom.type === "LineString") {
-      addWaterLine(geom.coordinates);
-    } else if (geom.type === "MultiLineString") {
-      for (const line of geom.coordinates) addWaterLine(line);
-    }
-  }
-
-  return { group, polys, lines };
-}
-
 async function loadGeoJSON(url) {
   const res = await fetch(url + "?" + Date.now());
   if (!res.ok) throw new Error("Nepodarilo sa nacitat " + url);
@@ -437,6 +475,7 @@ let terrainMesh = null;
 let zMinGlobal = 0;
 let unprojectFn = null;
 let statusBase = "";
+let waterMaskRef = null;
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -464,9 +503,23 @@ function onPointerDown(event) {
     lonLat = ` | lon ${lon.toFixed(5)}, lat ${lat.toFixed(5)}`;
   }
 
+  // hrubá detekcia vody z masky
+  let waterTxt = "";
+  if (waterMaskRef && window.__heightmap) {
+    const hm = window.__heightmap;
+    const u = (p.x - hm.minX) / Math.max(hm.maxX - hm.minX, 1e-6);
+    const v = (p.z - hm.minY) / Math.max(hm.maxY - hm.minY, 1e-6);
+    const ix = Math.round(u * (hm.cols - 1));
+    const iy = Math.round(v * (hm.rows - 1));
+    if (ix >= 0 && iy >= 0 && ix < hm.cols && iy < hm.rows) {
+      if (hm.water[iy * hm.cols + ix]) waterTxt = " | VODA";
+    }
+  }
+
   info.textContent =
     `X ${p.x.toFixed(1)} m | Y ${elev.toFixed(1)} m n.m. | Z ${p.z.toFixed(1)} m` +
-    lonLat;
+    lonLat +
+    waterTxt;
 }
 
 canvas.addEventListener("pointerdown", onPointerDown);
@@ -506,10 +559,10 @@ async function init() {
     const mid = buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.4);
     scene.add(mid.group);
 
-    const coreLines = buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.45);
+    const coreLines = buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.4);
     scene.add(coreLines.group);
 
-    info.textContent = "Heightmap + mesh...";
+    info.textContent = "Heightmap s riekou...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
@@ -535,18 +588,26 @@ async function init() {
       cols = Math.max(8, Math.round(LONG * aspect));
     }
 
+    const waterIndex = buildWaterIndex(riverFeatures, project, coreBounds);
+    waterMaskRef = waterIndex;
+
     await new Promise((r) => setTimeout(r, 30));
 
-    const heightmap = buildHeightmapIDW(samples, boundsXY, cols, rows, 6, 2);
+    const heightmap = buildHeightmapWithRiver(
+      samples,
+      boundsXY,
+      cols,
+      rows,
+      waterIndex,
+      unprojectFn,
+      6,
+      2
+    );
     window.__heightmap = heightmap;
     showHeightmapPreview(heightmap);
 
     terrainMesh = buildTerrainMesh(heightmap, zMin, zMax);
     scene.add(terrainMesh);
-
-    // --- RIEKA ---
-    const river = buildRiverLayer(riverFeatures, project, heightmap, zMin);
-    scene.add(river.group);
 
     const box = new THREE.Box3().setFromObject(terrainMesh);
     const center = box.getCenter(new THREE.Vector3());
@@ -566,8 +627,9 @@ async function init() {
 
     statusBase =
       "Mesh " + cols + "x" + rows +
-      " | voda P" + river.polys + "/L" + river.lines +
-      " | klikni na CORE";
+      " | voda buniek " + heightmap.waterCells +
+      " | P" + waterIndex.polyCount + "/L" + waterIndex.lineCount +
+      " | klikni CORE";
     info.textContent = statusBase;
   } catch (err) {
     console.error(err);
