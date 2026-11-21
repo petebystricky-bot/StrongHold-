@@ -28,6 +28,10 @@ const COLOR_LOW = new THREE.Color("#2d6a3e");
 const COLOR_HIGH = new THREE.Color("#8b6914");
 const COLOR_WATER = new THREE.Color("#1a6a9a");
 
+// max spád hladiny: 0.5 m na 1 km (veľmi jemné)
+const MAX_SLOPE = 0.0005;
+const LINE_HALF_WIDTH = 28;
+
 function colorByElevation(elev, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
   return COLOR_LOW.clone().lerp(COLOR_HIGH, Math.min(1, Math.max(0, t)));
@@ -242,7 +246,35 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     }
   }
 
-  const LINE_HALF_WIDTH = 28;
+  // hlavná os = najdlhšia línia v CORE (typicky Váh)
+  let mainLine = null;
+  let mainLen = -1;
+  for (const line of linesM) {
+    let len = 0;
+    for (let i = 0; i < line.length - 1; i++) {
+      len += Math.hypot(line[i + 1].x - line[i].x, line[i + 1].y - line[i].y);
+    }
+    if (len > mainLen) {
+      mainLen = len;
+      mainLine = line;
+    }
+  }
+
+  /** Profile pozdĺž hlavnej osi: body s kumulatívnou vzdialenosťou s */
+  function buildStationPolyline() {
+    if (!mainLine || mainLine.length < 2) return [];
+    const stations = [];
+    let s = 0;
+    stations.push({ x: mainLine[0].x, y: mainLine[0].y, s: 0 });
+    for (let i = 1; i < mainLine.length; i++) {
+      s += Math.hypot(
+        mainLine[i].x - mainLine[i - 1].x,
+        mainLine[i].y - mainLine[i - 1].y
+      );
+      stations.push({ x: mainLine[i].x, y: mainLine[i].y, s });
+    }
+    return stations;
+  }
 
   function isWater(lon, lat, x, y) {
     for (const ring of polygons) {
@@ -257,34 +289,37 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     return false;
   }
 
-  /** Najbližší bod na stredovej línii koryta (metre) */
-  function nearestCenterline(x, y) {
-    let best = null;
+  /** Najbližší bod na hlavnej osi + staničenie s */
+  function nearestOnMain(x, y) {
+    if (!mainLine || mainLine.length < 2) return null;
     let bestD = Infinity;
-    for (const line of linesM) {
-      for (let i = 0; i < line.length - 1; i++) {
-        const ax = line[i].x, ay = line[i].y;
-        const bx = line[i + 1].x, by = line[i + 1].y;
-        const dx = bx - ax, dy = by - ay;
-        const len2 = dx * dx + dy * dy;
-        let t = len2 < 1e-12 ? 0 : ((x - ax) * dx + (y - ay) * dy) / len2;
-        t = Math.max(0, Math.min(1, t));
-        const px = ax + t * dx;
-        const py = ay + t * dy;
-        const d = Math.hypot(x - px, y - py);
-        if (d < bestD) {
-          bestD = d;
-          best = { x: px, y: py, d };
-        }
+    let best = null;
+    let sBase = 0;
+    for (let i = 0; i < mainLine.length - 1; i++) {
+      const ax = mainLine[i].x, ay = mainLine[i].y;
+      const bx = mainLine[i + 1].x, by = mainLine[i + 1].y;
+      const dx = bx - ax, dy = by - ay;
+      const segLen = Math.hypot(dx, dy);
+      const len2 = dx * dx + dy * dy;
+      let t = len2 < 1e-12 ? 0 : ((x - ax) * dx + (y - ay) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const px = ax + t * dx;
+      const py = ay + t * dy;
+      const d = Math.hypot(x - px, y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = { x: px, y: py, s: sBase + t * segLen, d };
       }
+      sBase += segLen;
     }
     return best;
   }
 
   return {
     isWater,
-    nearestCenterline,
-    hasLines: linesM.length > 0,
+    nearestOnMain,
+    buildStationPolyline,
+    hasLines: !!mainLine,
     polyCount: polygons.length,
     lineCount: linesM.length
   };
@@ -302,16 +337,77 @@ function sampleGrid(heights, cols, rows, minX, maxX, minY, maxY, x, y) {
   const j1 = Math.min(j0 + 1, rows - 1);
   const tx = fx - i0;
   const ty = fy - j0;
-  const h00 = heights[j0 * cols + i0];
-  const h10 = heights[j0 * cols + i1];
-  const h01 = heights[j1 * cols + i0];
-  const h11 = heights[j1 * cols + i1];
   return (
-    h00 * (1 - tx) * (1 - ty) +
-    h10 * tx * (1 - ty) +
-    h01 * (1 - tx) * ty +
-    h11 * tx * ty
+    heights[j0 * cols + i0] * (1 - tx) * (1 - ty) +
+    heights[j0 * cols + i1] * tx * (1 - ty) +
+    heights[j1 * cols + i0] * (1 - tx) * ty +
+    heights[j1 * cols + i1] * tx * ty
   );
+}
+
+/**
+ * Profil hladiny pozdĺž toku:
+ * - vzorky IDW na osi
+ * - vyhladenie
+ * - monotónny jemný spád (neide do kopca po toku)
+ */
+function buildWaterProfile(stations, idwHeights, cols, rows, boundsXY) {
+  const { minX, maxX, minY, maxY } = boundsXY;
+  if (!stations.length) return null;
+
+  const raw = stations.map((st) => {
+    const h = sampleGrid(idwHeights, cols, rows, minX, maxX, minY, maxY, st.x, st.y);
+    return { s: st.s, h: h == null ? 0 : h };
+  });
+
+  // kĺzavý priemer
+  const win = 3;
+  const smooth = raw.map((p, i) => {
+    let sum = 0, n = 0;
+    for (let k = i - win; k <= i + win; k++) {
+      if (k < 0 || k >= raw.length) continue;
+      sum += raw[k].h;
+      n++;
+    }
+    return { s: p.s, h: sum / n };
+  });
+
+  // smer toku: nech hladina celkovo klesá (ak IDW rastie, otočíme staničenie)
+  const first = smooth[0].h;
+  const last = smooth[smooth.length - 1].h;
+  if (last > first + 0.5) {
+    const sMax = smooth[smooth.length - 1].s;
+    smooth.reverse();
+    for (const p of smooth) p.s = sMax - p.s;
+    smooth.sort((a, b) => a.s - b.s);
+  }
+
+  // monotónny spád + limit MAX_SLOPE
+  const profile = [{ s: smooth[0].s, h: smooth[0].h }];
+  for (let i = 1; i < smooth.length; i++) {
+    const ds = Math.max(smooth[i].s - profile[i - 1].s, 1e-3);
+    const maxDrop = MAX_SLOPE * ds;
+    // nesmie stúpať; klesanie max MAX_SLOPE
+    let h = Math.min(smooth[i].h, profile[i - 1].h);
+    h = Math.max(h, profile[i - 1].h - Math.max(maxDrop, 0.0001));
+    // ak by chcela stúpať viac, pridrž predchádzajúcu (vodováha)
+    if (smooth[i].h > profile[i - 1].h) h = profile[i - 1].h - maxDrop * 0.25;
+    profile.push({ s: smooth[i].s, h });
+  }
+
+  function heightAtS(s) {
+    if (s <= profile[0].s) return profile[0].h;
+    if (s >= profile[profile.length - 1].s) return profile[profile.length - 1].h;
+    for (let i = 0; i < profile.length - 1; i++) {
+      if (s >= profile[i].s && s <= profile[i + 1].s) {
+        const t = (s - profile[i].s) / Math.max(profile[i + 1].s - profile[i].s, 1e-6);
+        return profile[i].h * (1 - t) + profile[i + 1].h * t;
+      }
+    }
+    return profile[profile.length - 1].h;
+  }
+
+  return { heightAtS, profile };
 }
 
 function buildHeightmapWithRiver(
@@ -353,12 +449,11 @@ function buildHeightmapWithRiver(
     return out.length ? out : samples;
   }
 
-  // 1) IDW
+  // 1) IDW terén
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
       const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
-
       const candidates = nearby(x, y);
       const dists = candidates.map((s) => ({
         s,
@@ -366,9 +461,7 @@ function buildHeightmapWithRiver(
       }));
       dists.sort((a, b) => a.d - b.d);
       const nearest = dists.slice(0, Math.min(k, dists.length));
-
-      let wSum = 0;
-      let zSum = 0;
+      let wSum = 0, zSum = 0;
       for (const { s, d } of nearest) {
         const w = 1 / Math.pow(d, power);
         wSum += w;
@@ -377,6 +470,8 @@ function buildHeightmapWithRiver(
       heights[j * cols + i] = zSum / wSum;
     }
   }
+
+  const idwCopy = new Float32Array(heights);
 
   // 2) maska vody
   for (let j = 0; j < rows; j++) {
@@ -388,74 +483,38 @@ function buildHeightmapWithRiver(
     }
   }
 
-  // 3) výška vody = výška na strede koryta (nie svah), jemne nižšie dno
-  const BED_BELOW = 1.5;
-  const idwCopy = new Float32Array(heights);
+  // 3) profil hladiny so slabým spádom
+  const stations = waterIndex.buildStationPolyline();
+  const waterProfile = buildWaterProfile(stations, idwCopy, cols, rows, boundsXY);
 
+  // fallback: jedna plochá hladina = median
+  let flatLevel = null;
+  if (!waterProfile) {
+    const vals = [];
+    for (let n = 0; n < water.length; n++) if (water[n]) vals.push(idwCopy[n]);
+    vals.sort((a, b) => a - b);
+    flatLevel = vals.length ? vals[Math.floor(vals.length / 2)] : 0;
+  }
+
+  // 4) vodné bunky = hladina podľa staničenia na osi (priečne rovnaká)
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       if (!water[j * cols + i]) continue;
-
       const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
       const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
 
-      let surface = null;
-
-      // prioritne: výška na najbližšom bode stredovej čiary Váhu
-      if (waterIndex.hasLines) {
-        const c = waterIndex.nearestCenterline(x, y);
-        if (c) {
-          surface = sampleGrid(idwCopy, cols, rows, minX, maxX, minY, maxY, c.x, c.y);
-        }
-      }
-
-      // fallback: minimum IDW v okolí medzi vodnými bunkami (hladina v „miske“)
-      if (surface == null) {
-        let minH = idwCopy[j * cols + i];
-        const R = 4;
-        for (let dj = -R; dj <= R; dj++) {
-          for (let di = -R; di <= R; di++) {
-            const ii = i + di;
-            const jj = j + dj;
-            if (ii < 0 || jj < 0 || ii >= cols || jj >= rows) continue;
-            if (!water[jj * cols + ii]) continue;
-            const h = idwCopy[jj * cols + ii];
-            if (h < minH) minH = h;
-          }
-        }
-        surface = minH;
-      }
-
-      heights[j * cols + i] = surface - BED_BELOW;
-    }
-  }
-
-  // 4) vyhladenie vodnej hladiny (2 prechody minima v susedstve vody)
-  for (let pass = 0; pass < 2; pass++) {
-    const next = new Float32Array(heights);
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        if (!water[j * cols + i]) continue;
-        let minH = heights[j * cols + i];
-        for (let dj = -1; dj <= 1; dj++) {
-          for (let di = -1; di <= 1; di++) {
-            const ii = i + di;
-            const jj = j + dj;
-            if (ii < 0 || jj < 0 || ii >= cols || jj >= rows) continue;
-            if (!water[jj * cols + ii]) continue;
-            const h = heights[jj * cols + ii];
-            if (h < minH) minH = h;
-          }
-        }
-        next[j * cols + i] = minH;
+      if (waterProfile) {
+        const n = waterIndex.nearestOnMain(x, y);
+        if (n) heights[j * cols + i] = waterProfile.heightAtS(n.s);
+        else heights[j * cols + i] = waterProfile.heightAtS(0);
+      } else {
+        heights[j * cols + i] = flatLevel;
       }
     }
-    heights.set(next);
   }
 
   let waterCells = 0;
-  let hMin = Infinity;
-  let hMax = -Infinity;
+  let hMin = Infinity, hMax = -Infinity;
   for (let n = 0; n < heights.length; n++) {
     if (water[n]) waterCells++;
     if (heights[n] < hMin) hMin = heights[n];
@@ -586,27 +645,22 @@ const pointer = new THREE.Vector2();
 
 function onPointerDown(event) {
   if (!terrainMesh) return;
-
   const rect = canvas.getBoundingClientRect();
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObject(terrainMesh, false);
   if (!hits.length) {
     info.textContent = statusBase + " | klik mimo CORE";
     return;
   }
-
   const p = hits[0].point;
   const elev = p.y + zMinGlobal;
-
   let lonLat = "";
   if (unprojectFn) {
     const [lon, lat] = unprojectFn(p.x, p.z);
     lonLat = ` | lon ${lon.toFixed(5)}, lat ${lat.toFixed(5)}`;
   }
-
   let waterTxt = "";
   if (window.__heightmap) {
     const hm = window.__heightmap;
@@ -614,19 +668,16 @@ function onPointerDown(event) {
     const v = (p.z - hm.minY) / Math.max(hm.maxY - hm.minY, 1e-6);
     const ix = Math.round(u * (hm.cols - 1));
     const iy = Math.round(v * (hm.rows - 1));
-    if (ix >= 0 && iy >= 0 && ix < hm.cols && iy < hm.rows) {
-      if (hm.water[iy * hm.cols + ix]) waterTxt = " | VODA";
+    if (ix >= 0 && iy >= 0 && ix < hm.cols && iy < hm.rows && hm.water[iy * hm.cols + ix]) {
+      waterTxt = " | VODA";
     }
   }
-
   info.textContent =
     `X ${p.x.toFixed(1)} m | Y ${elev.toFixed(1)} m n.m. | Z ${p.z.toFixed(1)} m` +
-    lonLat +
-    waterTxt;
+    lonLat + waterTxt;
 }
 
 canvas.addEventListener("pointerdown", onPointerDown);
-
 window.__heightmap = null;
 
 async function init() {
@@ -656,16 +707,11 @@ async function init() {
     const zMin = coreBounds.minZ;
     const zMax = coreBounds.maxZ;
 
-    const outer = buildLineLayer(outerFeatures, project, zMin, zMax, colorOuter, 0.22);
-    scene.add(outer.group);
+    scene.add(buildLineLayer(outerFeatures, project, zMin, zMax, colorOuter, 0.22).group);
+    scene.add(buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.4).group);
+    scene.add(buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.4).group);
 
-    const mid = buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.4);
-    scene.add(mid.group);
-
-    const coreLines = buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.4);
-    scene.add(coreLines.group);
-
-    info.textContent = "Heightmap: koryto podla stredu rieky...";
+    info.textContent = "Heightmap + vodna hladina so spadom...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
@@ -680,7 +726,6 @@ async function init() {
     const widthM = boundsXY.maxX - boundsXY.minX;
     const heightM = boundsXY.maxY - boundsXY.minY;
     const aspect = widthM / Math.max(heightM, 1e-6);
-
     const LONG = 128;
     let cols, rows;
     if (aspect >= 1) {
@@ -692,18 +737,10 @@ async function init() {
     }
 
     const waterIndex = buildWaterIndex(riverFeatures, project, coreBounds);
-
     await new Promise((r) => setTimeout(r, 30));
 
     const heightmap = buildHeightmapWithRiver(
-      samples,
-      boundsXY,
-      cols,
-      rows,
-      waterIndex,
-      unprojectFn,
-      6,
-      2
+      samples, boundsXY, cols, rows, waterIndex, unprojectFn, 6, 2
     );
     window.__heightmap = heightmap;
     showHeightmapPreview(heightmap);
@@ -717,20 +754,13 @@ async function init() {
     const maxDim = Math.max(size.x, size.y, size.z, 1);
 
     controls.target.copy(center);
-    camera.position.set(
-      center.x + maxDim * 0.9,
-      center.y + maxDim * 0.55,
-      center.z + maxDim * 0.9
-    );
+    camera.position.set(center.x + maxDim * 0.9, center.y + maxDim * 0.55, center.z + maxDim * 0.9);
     camera.near = maxDim / 3000;
     camera.far = maxDim * 150;
     camera.updateProjectionMatrix();
     controls.update();
 
-    statusBase =
-      "Mesh " + cols + "x" + rows +
-      " | voda " + heightmap.waterCells +
-      " | klikni CORE";
+    statusBase = "Mesh " + cols + "x" + rows + " | voda " + heightmap.waterCells + " | klikni CORE";
     info.textContent = statusBase;
   } catch (err) {
     console.error(err);
