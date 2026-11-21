@@ -26,6 +26,8 @@ scene.add(sun);
 
 const COLOR_LOW = new THREE.Color("#2d6a3e");
 const COLOR_HIGH = new THREE.Color("#8b6914");
+const COLOR_WATER = new THREE.Color("#1a5f8a");
+const COLOR_WATER_LINE = new THREE.Color("#3a9fd4");
 
 function colorByElevation(elev, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
@@ -75,14 +77,13 @@ function makeProjector(bounds) {
     ];
   }
 
-  // inverzná projekcia: metre → lon/lat
   function unproject(x, y) {
     const lon = x / mPerDegLon + bounds.minLon;
     const lat = y / mPerDegLat + bounds.minLat;
     return [lon, lat];
   }
 
-  return { project, unproject, mPerDegLon, mPerDegLat, origin: bounds };
+  return { project, unproject };
 }
 
 function colorOuter(z, minZ, maxZ) {
@@ -237,6 +238,33 @@ function buildHeightmapIDW(samples, boundsXY, cols, rows, k = 6, power = 2) {
   return { heights, cols, rows, minX, maxX, minY, maxY, hMin, hMax };
 }
 
+function sampleHeight(heightmap, x, y, zMin) {
+  const { heights, cols, rows, minX, maxX, minY, maxY } = heightmap;
+  const u = (x - minX) / Math.max(maxX - minX, 1e-6);
+  const v = (y - minY) / Math.max(maxY - minY, 1e-6);
+  if (u < 0 || u > 1 || v < 0 || v > 1) {
+    return 0; // mimo CORE – plochá nízka voda
+  }
+  const fx = u * (cols - 1);
+  const fy = v * (rows - 1);
+  const i0 = Math.floor(fx);
+  const j0 = Math.floor(fy);
+  const i1 = Math.min(i0 + 1, cols - 1);
+  const j1 = Math.min(j0 + 1, rows - 1);
+  const tx = fx - i0;
+  const ty = fy - j0;
+  const h00 = heights[j0 * cols + i0];
+  const h10 = heights[j0 * cols + i1];
+  const h01 = heights[j1 * cols + i0];
+  const h11 = heights[j1 * cols + i1];
+  const h =
+    h00 * (1 - tx) * (1 - ty) +
+    h10 * tx * (1 - ty) +
+    h01 * (1 - tx) * ty +
+    h11 * tx * ty;
+  return h - zMin;
+}
+
 function showHeightmapPreview(heightmap) {
   let preview = document.getElementById("hmPreview");
   if (!preview) {
@@ -319,13 +347,92 @@ function buildTerrainMesh(heightmap, zMin, zMax) {
   return mesh;
 }
 
+/** Rieka / voda z GeoJSON */
+function buildRiverLayer(features, project, heightmap, zMin) {
+  const group = new THREE.Group();
+  let polys = 0;
+  let lines = 0;
+  const Y_OFFSET = 1.5; // mierne nad terénom, aby nepreblikávalo
+
+  function addWaterPolygon(ring) {
+    if (!ring || ring.length < 3) return;
+    const shape = new THREE.Shape();
+    const [x0, y0] = project(ring[0][0], ring[0][1]);
+    shape.moveTo(x0, -y0);
+    for (let i = 1; i < ring.length; i++) {
+      const [x, y] = project(ring[i][0], ring[i][1]);
+      shape.lineTo(x, -y);
+    }
+    const geom = new THREE.ShapeGeometry(shape);
+    geom.rotateX(-Math.PI / 2);
+
+    // výška = priemer výšok ringov na teréne
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < ring.length; i += Math.max(1, Math.floor(ring.length / 12))) {
+      const [x, y] = project(ring[i][0], ring[i][1]);
+      sum += sampleHeight(heightmap, x, y, zMin);
+      n++;
+    }
+    const baseY = (n ? sum / n : 0) + Y_OFFSET;
+
+    const mat = new THREE.MeshBasicMaterial({
+      color: COLOR_WATER,
+      transparent: true,
+      opacity: 0.75,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.y = baseY;
+    group.add(mesh);
+    polys++;
+  }
+
+  function addWaterLine(coords) {
+    if (!coords || coords.length < 2) return;
+    const positions = new Float32Array(coords.length * 3);
+    for (let i = 0; i < coords.length; i++) {
+      const [x, y] = project(coords[i][0], coords[i][1]);
+      const hy = sampleHeight(heightmap, x, y, zMin) + Y_OFFSET;
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = hy;
+      positions[i * 3 + 2] = y;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: COLOR_WATER_LINE,
+      linewidth: 2
+    });
+    group.add(new THREE.Line(geom, mat));
+    lines++;
+  }
+
+  for (const f of features) {
+    const geom = f.geometry;
+    if (!geom) continue;
+
+    if (geom.type === "Polygon") {
+      addWaterPolygon(geom.coordinates[0]);
+    } else if (geom.type === "MultiPolygon") {
+      for (const poly of geom.coordinates) addWaterPolygon(poly[0]);
+    } else if (geom.type === "LineString") {
+      addWaterLine(geom.coordinates);
+    } else if (geom.type === "MultiLineString") {
+      for (const line of geom.coordinates) addWaterLine(line);
+    }
+  }
+
+  return { group, polys, lines };
+}
+
 async function loadGeoJSON(url) {
   const res = await fetch(url + "?" + Date.now());
   if (!res.ok) throw new Error("Nepodarilo sa nacitat " + url);
   return res.json();
 }
 
-// --- stav pre klik ---
 let terrainMesh = null;
 let zMinGlobal = 0;
 let unprojectFn = null;
@@ -348,8 +455,8 @@ function onPointerDown(event) {
     return;
   }
 
-  const p = hits[0].point; // world: X, Y, Z
-  const elev = p.y + zMinGlobal; // skutočná nadmorská výška
+  const p = hits[0].point;
+  const elev = p.y + zMinGlobal;
 
   let lonLat = "";
   if (unprojectFn) {
@@ -370,15 +477,17 @@ async function init() {
   try {
     info.textContent = "Nacitam data...";
 
-    const [outerJson, midJson, coreJson] = await Promise.all([
+    const [outerJson, midJson, coreJson, riverJson] = await Promise.all([
       loadGeoJSON("data/contours_outer.geojson"),
       loadGeoJSON("data/contours_bg.geojson"),
-      loadGeoJSON("data/contours.geojson")
+      loadGeoJSON("data/contours.geojson"),
+      loadGeoJSON("data/river.geojson")
     ]);
 
     const outerFeatures = outerJson.features || [];
     const midFeatures = midJson.features || [];
     const coreFeatures = coreJson.features || [];
+    const riverFeatures = riverJson.features || [];
 
     const outerBounds = collectBounds(outerFeatures);
     const coreBounds = collectBounds(coreFeatures);
@@ -435,6 +544,10 @@ async function init() {
     terrainMesh = buildTerrainMesh(heightmap, zMin, zMax);
     scene.add(terrainMesh);
 
+    // --- RIEKA ---
+    const river = buildRiverLayer(riverFeatures, project, heightmap, zMin);
+    scene.add(river.group);
+
     const box = new THREE.Box3().setFromObject(terrainMesh);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -453,7 +566,8 @@ async function init() {
 
     statusBase =
       "Mesh " + cols + "x" + rows +
-      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m | klikni na CORE";
+      " | voda P" + river.polys + "/L" + river.lines +
+      " | klikni na CORE";
     info.textContent = statusBase;
   } catch (err) {
     console.error(err);
