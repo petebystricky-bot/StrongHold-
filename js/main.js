@@ -19,7 +19,18 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const sun = new THREE.DirectionalLight(0xffffff, 0.55);
+sun.position.set(120, 220, 90);
+scene.add(sun);
+
+const COLOR_LOW = new THREE.Color("#2d6a3e");
+const COLOR_HIGH = new THREE.Color("#8b6914");
+
+function colorByElevation(elev, minZ, maxZ) {
+  const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
+  return COLOR_LOW.clone().lerp(COLOR_HIGH, Math.min(1, Math.max(0, t)));
+}
 
 function collectBounds(features) {
   let minLon = Infinity, maxLon = -Infinity;
@@ -78,7 +89,7 @@ function colorMid(z, minZ, maxZ) {
   return new THREE.Color(`rgb(\( {r}, \){g},${b})`);
 }
 
-function colorCore(z, minZ, maxZ) {
+function colorCoreLine(z, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (z - minZ) / (maxZ - minZ);
   const r = Math.floor(50 + t * 170);
   const g = Math.floor(150 + t * 70);
@@ -153,10 +164,6 @@ function collectSamples(features, project, stride = 3) {
   return samples;
 }
 
-/**
- * BOD 2: IDW interpolácia (k najbližších vzoriek)
- * power = 2 → bežné, vyššie = ostrejšie prechody
- */
 function buildHeightmapIDW(samples, boundsXY, cols, rows, k = 6, power = 2) {
   const { minX, maxX, minY, maxY } = boundsXY;
   const heights = new Float32Array(cols * rows);
@@ -232,8 +239,7 @@ function showHeightmapPreview(heightmap) {
   }
 
   const { heights, cols, rows, hMin, hMax } = heightmap;
-
-  const maxPx = 180;
+  const maxPx = 160;
   const aspect = cols / Math.max(rows, 1);
   let w, h;
   if (aspect >= 1) {
@@ -267,6 +273,43 @@ function showHeightmapPreview(heightmap) {
   ctx.putImageData(img, 0, 0);
 }
 
+/** BOD 3: mesh z heightmapy */
+function buildTerrainMesh(heightmap, zMin, zMax) {
+  const { heights, cols, rows, minX, maxX, minY, maxY } = heightmap;
+  const width = maxX - minX;
+  const depth = maxY - minY;
+
+  const geom = new THREE.PlaneGeometry(width, depth, cols - 1, rows - 1);
+  geom.rotateX(-Math.PI / 2);
+
+  const pos = geom.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+
+  // PlaneGeometry: vertex (i, j) ≈ index j * cols + i
+  for (let iy = 0; iy < rows; iy++) {
+    for (let ix = 0; ix < cols; ix++) {
+      const i = iy * cols + ix;
+      const h = heights[iy * cols + ix];
+      pos.setY(i, h - zMin);
+      const c = colorByElevation(h, zMin, zMax);
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+  }
+
+  geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geom.computeVertexNormals();
+
+  const mat = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.set((minX + maxX) / 2, 0, (minY + maxY) / 2);
+  return mesh;
+}
+
 async function loadGeoJSON(url) {
   const res = await fetch(url + "?" + Date.now());
   if (!res.ok) throw new Error("Nepodarilo sa nacitat " + url);
@@ -277,7 +320,7 @@ window.__heightmap = null;
 
 async function init() {
   try {
-    info.textContent = "Nacitam 3 vrstvy...";
+    info.textContent = "Nacitam data...";
 
     const [outerJson, midJson, coreJson] = await Promise.all([
       loadGeoJSON("data/contours_outer.geojson"),
@@ -297,17 +340,18 @@ async function init() {
     const zMin = coreBounds.minZ;
     const zMax = coreBounds.maxZ;
 
+    // Outer + Mid – čiary
     const outer = buildLineLayer(outerFeatures, project, zMin, zMax, colorOuter, 0.22);
     scene.add(outer.group);
 
-    const mid = buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.45);
+    const mid = buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.4);
     scene.add(mid.group);
 
-    const core = buildLineLayer(coreFeatures, project, zMin, zMax, colorCore, 1.0);
-    scene.add(core.group);
+    // jemné CORE čiary navrchu meshu
+    const coreLines = buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.45);
+    scene.add(coreLines.group);
 
-    // ----- BOD 1 + 2 -----
-    info.textContent = "Bod 2: IDW interpolacia...";
+    info.textContent = "Bod 2+3: heightmap + mesh...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
@@ -333,23 +377,25 @@ async function init() {
       cols = Math.max(8, Math.round(LONG * aspect));
     }
 
-    // krátky yield, aby sa stihlo prekresliť info
     await new Promise((r) => setTimeout(r, 30));
 
     const heightmap = buildHeightmapIDW(samples, boundsXY, cols, rows, 6, 2);
     window.__heightmap = heightmap;
     showHeightmapPreview(heightmap);
 
-    const box = new THREE.Box3().setFromObject(core.group);
+    const terrain = buildTerrainMesh(heightmap, zMin, zMax);
+    scene.add(terrain);
+
+    const box = new THREE.Box3().setFromObject(terrain);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z, 1);
 
     controls.target.copy(center);
     camera.position.set(
-      center.x + maxDim * 0.95,
+      center.x + maxDim * 0.9,
       center.y + maxDim * 0.55,
-      center.z + maxDim * 0.95
+      center.z + maxDim * 0.9
     );
     camera.near = maxDim / 3000;
     camera.far = maxDim * 150;
@@ -357,10 +403,9 @@ async function init() {
     controls.update();
 
     info.textContent =
-      "BOD 2 OK (IDW) | samples " + samples.length +
-      " | map " + cols + "x" + rows +
+      "BOD 3 OK | mesh " + cols + "x" + rows +
       " | " + Math.round(widthM) + "x" + Math.round(heightM) + " m" +
-      " | h " + Math.round(heightmap.hMin) + "–" + Math.round(heightmap.hMax) + " m";
+      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m";
   } catch (err) {
     console.error(err);
     info.textContent = "CHYBA: " + err.message;
