@@ -130,8 +130,6 @@ function buildLineLayer(features, project, zMin, zMax, colorFn, opacity) {
   return { group, count };
 }
 
-// ========== BOD 1: heightmap ==========
-
 function collectSamples(features, project, stride = 3) {
   const samples = [];
   for (const f of features) {
@@ -155,8 +153,11 @@ function collectSamples(features, project, stride = 3) {
   return samples;
 }
 
-/** Nearest-neighbour heightmap s ľubovoľným cols x rows */
-function buildHeightmapNearest(samples, boundsXY, cols, rows) {
+/**
+ * BOD 2: IDW interpolácia (k najbližších vzoriek)
+ * power = 2 → bežné, vyššie = ostrejšie prechody
+ */
+function buildHeightmapIDW(samples, boundsXY, cols, rows, k = 6, power = 2) {
   const { minX, maxX, minY, maxY } = boundsXY;
   const heights = new Float32Array(cols * rows);
 
@@ -167,9 +168,9 @@ function buildHeightmapNearest(samples, boundsXY, cols, rows) {
   for (const s of samples) {
     const cx = Math.floor((s.x - minX) / cellSize);
     const cy = Math.floor((s.y - minY) / cellSize);
-    const k = key(cx, cy);
-    if (!grid.has(k)) grid.set(k, []);
-    grid.get(k).push(s);
+    const kk = key(cx, cy);
+    if (!grid.has(kk)) grid.set(kk, []);
+    grid.get(kk).push(s);
   }
 
   function nearby(x, y) {
@@ -194,16 +195,22 @@ function buildHeightmapNearest(samples, boundsXY, cols, rows) {
       const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
 
       const candidates = nearby(x, y);
-      let best = candidates[0];
-      let bestD = Infinity;
+      const dists = [];
       for (const s of candidates) {
-        const d = (s.x - x) * (s.x - x) + (s.y - y) * (s.y - y);
-        if (d < bestD) {
-          bestD = d;
-          best = s;
-        }
+        const d = Math.hypot(s.x - x, s.y - y) + 1e-6;
+        dists.push({ s, d });
       }
-      const h = best.z;
+      dists.sort((a, b) => a.d - b.d);
+      const nearest = dists.slice(0, Math.min(k, dists.length));
+
+      let wSum = 0;
+      let zSum = 0;
+      for (const { s, d } of nearest) {
+        const w = 1 / Math.pow(d, power);
+        wSum += w;
+        zSum += w * s.z;
+      }
+      const h = zSum / wSum;
       heights[j * cols + i] = h;
       if (h < hMin) hMin = h;
       if (h > hMax) hMax = h;
@@ -213,7 +220,6 @@ function buildHeightmapNearest(samples, boundsXY, cols, rows) {
   return { heights, cols, rows, minX, maxX, minY, maxY, hMin, hMax };
 }
 
-/** 2D náhľad – pomer strán ako CORE */
 function showHeightmapPreview(heightmap) {
   let preview = document.getElementById("hmPreview");
   if (!preview) {
@@ -300,8 +306,8 @@ async function init() {
     const core = buildLineLayer(coreFeatures, project, zMin, zMax, colorCore, 1.0);
     scene.add(core.group);
 
-    // ----- BOD 1 -----
-    info.textContent = "Bod 1: tvorim heightmap...";
+    // ----- BOD 1 + 2 -----
+    info.textContent = "Bod 2: IDW interpolacia...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
@@ -327,7 +333,10 @@ async function init() {
       cols = Math.max(8, Math.round(LONG * aspect));
     }
 
-    const heightmap = buildHeightmapNearest(samples, boundsXY, cols, rows);
+    // krátky yield, aby sa stihlo prekresliť info
+    await new Promise((r) => setTimeout(r, 30));
+
+    const heightmap = buildHeightmapIDW(samples, boundsXY, cols, rows, 6, 2);
     window.__heightmap = heightmap;
     showHeightmapPreview(heightmap);
 
@@ -348,11 +357,10 @@ async function init() {
     controls.update();
 
     info.textContent =
-      "BOD 1 OK | samples " + samples.length +
+      "BOD 2 OK (IDW) | samples " + samples.length +
       " | map " + cols + "x" + rows +
       " | " + Math.round(widthM) + "x" + Math.round(heightM) + " m" +
-      " | h " + Math.round(heightmap.hMin) + "–" + Math.round(heightmap.hMax) + " m" +
-      " | Outer " + outer.count + " Mid " + mid.count + " Core " + core.count;
+      " | h " + Math.round(heightmap.hMin) + "–" + Math.round(heightmap.hMax) + " m";
   } catch (err) {
     console.error(err);
     info.textContent = "CHYBA: " + err.message;
