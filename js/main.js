@@ -132,7 +132,6 @@ function buildLineLayer(features, project, zMin, zMax, colorFn, opacity) {
 
 // ========== BOD 1: heightmap ==========
 
-/** Vzorky (x,y,z) z CORE vrstevníc */
 function collectSamples(features, project, stride = 3) {
   const samples = [];
   for (const f of features) {
@@ -156,18 +155,11 @@ function collectSamples(features, project, stride = 3) {
   return samples;
 }
 
-/**
- * Heightmap: mriežka výšok nad CORE.
- * Zatiaľ len najbližšia vzorka (nearest) – bez hladkej interpolácie.
- * Bod 2 doplní bilinear / IDW.
- */
-function buildHeightmapNearest(samples, boundsXY, resolution) {
+/** Nearest-neighbour heightmap s ľubovoľným cols x rows */
+function buildHeightmapNearest(samples, boundsXY, cols, rows) {
   const { minX, maxX, minY, maxY } = boundsXY;
-  const cols = resolution;
-  const rows = resolution;
   const heights = new Float32Array(cols * rows);
 
-  // priestorová mriežka na rýchle hľadanie
   const cellSize = Math.max(maxX - minX, maxY - minY) / 32;
   const grid = new Map();
   const key = (cx, cy) => cx + "," + cy;
@@ -198,8 +190,8 @@ function buildHeightmapNearest(samples, boundsXY, resolution) {
 
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
-      const x = minX + (i / (cols - 1)) * (maxX - minX);
-      const y = minY + (j / (rows - 1)) * (maxY - minY);
+      const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
+      const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
 
       const candidates = nearby(x, y);
       let best = candidates[0];
@@ -221,45 +213,52 @@ function buildHeightmapNearest(samples, boundsXY, resolution) {
   return { heights, cols, rows, minX, maxX, minY, maxY, hMin, hMax };
 }
 
-/** Malý 2D náhľad heightmapy (kontrola bodu 1) */
+/** 2D náhľad – pomer strán ako CORE */
 function showHeightmapPreview(heightmap) {
   let preview = document.getElementById("hmPreview");
   if (!preview) {
     preview = document.createElement("canvas");
     preview.id = "hmPreview";
-    preview.width = 160;
-    preview.height = 160;
     preview.style.cssText =
-      "position:fixed;left:12px;bottom:12px;width:160px;height:160px;" +
+      "position:fixed;left:12px;bottom:12px;" +
       "border:1px solid #444;image-rendering:pixelated;z-index:20;background:#111;";
     document.body.appendChild(preview);
   }
-  const ctx = preview.getContext("2d");
+
   const { heights, cols, rows, hMin, hMax } = heightmap;
+
+  const maxPx = 180;
+  const aspect = cols / Math.max(rows, 1);
+  let w, h;
+  if (aspect >= 1) {
+    w = maxPx;
+    h = Math.max(40, Math.round(maxPx / aspect));
+  } else {
+    h = maxPx;
+    w = Math.max(40, Math.round(maxPx * aspect));
+  }
+  preview.width = cols;
+  preview.height = rows;
+  preview.style.width = w + "px";
+  preview.style.height = h + "px";
+
+  const ctx = preview.getContext("2d");
   const img = ctx.createImageData(cols, rows);
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
-      const h = heights[j * cols + i];
-      const t = hMax === hMin ? 0.5 : (h - hMin) / (hMax - hMin);
-      // zelená → hnedá
+      const val = heights[j * cols + i];
+      const t = hMax === hMin ? 0.5 : (val - hMin) / (hMax - hMin);
       const r = Math.floor(45 + t * 140);
       const g = Math.floor(110 - t * 40);
       const b = Math.floor(50 - t * 20);
-      const idx = ((rows - 1 - j) * cols + i) * 4; // y hore
+      const idx = ((rows - 1 - j) * cols + i) * 4;
       img.data[idx] = r;
       img.data[idx + 1] = g;
       img.data[idx + 2] = b;
       img.data[idx + 3] = 255;
     }
   }
-  // vykresli do 160x160
-  const off = document.createElement("canvas");
-  off.width = cols;
-  off.height = rows;
-  off.getContext("2d").putImageData(img, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, 160, 160);
-  ctx.drawImage(off, 0, 0, 160, 160);
+  ctx.putImageData(img, 0, 0);
 }
 
 async function loadGeoJSON(url) {
@@ -268,7 +267,6 @@ async function loadGeoJSON(url) {
   return res.json();
 }
 
-// globálne – neskôr použijeme v bode 2 a 3
 window.__heightmap = null;
 
 async function init() {
@@ -315,12 +313,24 @@ async function init() {
       maxY: Math.max(y0, y1)
     };
 
-    const RESOLUTION = 128;
-    const heightmap = buildHeightmapNearest(samples, boundsXY, RESOLUTION);
+    const widthM = boundsXY.maxX - boundsXY.minX;
+    const heightM = boundsXY.maxY - boundsXY.minY;
+    const aspect = widthM / Math.max(heightM, 1e-6);
+
+    const LONG = 128;
+    let cols, rows;
+    if (aspect >= 1) {
+      cols = LONG;
+      rows = Math.max(8, Math.round(LONG / aspect));
+    } else {
+      rows = LONG;
+      cols = Math.max(8, Math.round(LONG * aspect));
+    }
+
+    const heightmap = buildHeightmapNearest(samples, boundsXY, cols, rows);
     window.__heightmap = heightmap;
     showHeightmapPreview(heightmap);
 
-    // kamera na core čiary
     const box = new THREE.Box3().setFromObject(core.group);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -339,7 +349,8 @@ async function init() {
 
     info.textContent =
       "BOD 1 OK | samples " + samples.length +
-      " | map " + RESOLUTION + "x" + RESOLUTION +
+      " | map " + cols + "x" + rows +
+      " | " + Math.round(widthM) + "x" + Math.round(heightM) + " m" +
       " | h " + Math.round(heightmap.hMin) + "–" + Math.round(heightmap.hMax) + " m" +
       " | Outer " + outer.count + " Mid " + mid.count + " Core " + core.count;
   } catch (err) {
