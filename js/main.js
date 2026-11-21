@@ -67,12 +67,22 @@ function makeProjector(bounds) {
   const midLat = (bounds.minLat + bounds.maxLat) / 2;
   const mPerDegLat = 111320;
   const mPerDegLon = 111320 * Math.cos((midLat * Math.PI) / 180);
-  return function (lon, lat) {
+
+  function project(lon, lat) {
     return [
       (lon - bounds.minLon) * mPerDegLon,
       (lat - bounds.minLat) * mPerDegLat
     ];
-  };
+  }
+
+  // inverzná projekcia: metre → lon/lat
+  function unproject(x, y) {
+    const lon = x / mPerDegLon + bounds.minLon;
+    const lat = y / mPerDegLat + bounds.minLat;
+    return [lon, lat];
+  }
+
+  return { project, unproject, mPerDegLon, mPerDegLat, origin: bounds };
 }
 
 function colorOuter(z, minZ, maxZ) {
@@ -273,7 +283,6 @@ function showHeightmapPreview(heightmap) {
   ctx.putImageData(img, 0, 0);
 }
 
-/** BOD 3: mesh z heightmapy */
 function buildTerrainMesh(heightmap, zMin, zMax) {
   const { heights, cols, rows, minX, maxX, minY, maxY } = heightmap;
   const width = maxX - minX;
@@ -285,7 +294,6 @@ function buildTerrainMesh(heightmap, zMin, zMax) {
   const pos = geom.attributes.position;
   const colors = new Float32Array(pos.count * 3);
 
-  // PlaneGeometry: vertex (i, j) ≈ index j * cols + i
   for (let iy = 0; iy < rows; iy++) {
     for (let ix = 0; ix < cols; ix++) {
       const i = iy * cols + ix;
@@ -307,6 +315,7 @@ function buildTerrainMesh(heightmap, zMin, zMax) {
   });
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.set((minX + maxX) / 2, 0, (minY + maxY) / 2);
+  mesh.name = "coreTerrain";
   return mesh;
 }
 
@@ -315,6 +324,45 @@ async function loadGeoJSON(url) {
   if (!res.ok) throw new Error("Nepodarilo sa nacitat " + url);
   return res.json();
 }
+
+// --- stav pre klik ---
+let terrainMesh = null;
+let zMinGlobal = 0;
+let unprojectFn = null;
+let statusBase = "";
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+function onPointerDown(event) {
+  if (!terrainMesh) return;
+
+  const rect = canvas.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(terrainMesh, false);
+  if (!hits.length) {
+    info.textContent = statusBase + " | klik mimo CORE";
+    return;
+  }
+
+  const p = hits[0].point; // world: X, Y, Z
+  const elev = p.y + zMinGlobal; // skutočná nadmorská výška
+
+  let lonLat = "";
+  if (unprojectFn) {
+    const [lon, lat] = unprojectFn(p.x, p.z);
+    lonLat = ` | lon ${lon.toFixed(5)}, lat ${lat.toFixed(5)}`;
+  }
+
+  info.textContent =
+    `X ${p.x.toFixed(1)} m | Y ${elev.toFixed(1)} m n.m. | Z ${p.z.toFixed(1)} m` +
+    lonLat;
+}
+
+canvas.addEventListener("pointerdown", onPointerDown);
 
 window.__heightmap = null;
 
@@ -335,23 +383,24 @@ async function init() {
     const outerBounds = collectBounds(outerFeatures);
     const coreBounds = collectBounds(coreFeatures);
 
-    const project = makeProjector(outerBounds);
+    const proj = makeProjector(outerBounds);
+    const project = proj.project;
+    unprojectFn = proj.unproject;
 
+    zMinGlobal = coreBounds.minZ;
     const zMin = coreBounds.minZ;
     const zMax = coreBounds.maxZ;
 
-    // Outer + Mid – čiary
     const outer = buildLineLayer(outerFeatures, project, zMin, zMax, colorOuter, 0.22);
     scene.add(outer.group);
 
     const mid = buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.4);
     scene.add(mid.group);
 
-    // jemné CORE čiary navrchu meshu
     const coreLines = buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.45);
     scene.add(coreLines.group);
 
-    info.textContent = "Bod 2+3: heightmap + mesh...";
+    info.textContent = "Heightmap + mesh...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
@@ -383,10 +432,10 @@ async function init() {
     window.__heightmap = heightmap;
     showHeightmapPreview(heightmap);
 
-    const terrain = buildTerrainMesh(heightmap, zMin, zMax);
-    scene.add(terrain);
+    terrainMesh = buildTerrainMesh(heightmap, zMin, zMax);
+    scene.add(terrainMesh);
 
-    const box = new THREE.Box3().setFromObject(terrain);
+    const box = new THREE.Box3().setFromObject(terrainMesh);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z, 1);
@@ -402,10 +451,10 @@ async function init() {
     camera.updateProjectionMatrix();
     controls.update();
 
-    info.textContent =
-      "BOD 3 OK | mesh " + cols + "x" + rows +
-      " | " + Math.round(widthM) + "x" + Math.round(heightM) + " m" +
-      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m";
+    statusBase =
+      "Mesh " + cols + "x" + rows +
+      " | Z " + Math.round(zMin) + "–" + Math.round(zMax) + " m | klikni na CORE";
+    info.textContent = statusBase;
   } catch (err) {
     console.error(err);
     info.textContent = "CHYBA: " + err.message;
