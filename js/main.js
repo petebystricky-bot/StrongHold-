@@ -172,8 +172,6 @@ function collectSamples(features, project, stride = 3) {
   return samples;
 }
 
-// ---------- voda: point-in-polygon + vzdialenosť k línii ----------
-
 function pointInRing(lon, lat, ring) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -197,10 +195,9 @@ function distToSeg(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** Pripraví vodné polygóny (lon/lat) a línie v metroch */
 function buildWaterIndex(riverFeatures, project, coreBounds) {
-  const polygons = []; // rings in lon/lat
-  const linesM = []; // arrays of {x,y} in meters
+  const polygons = [];
+  const linesM = [];
 
   const pad = 0.003;
   function nearCore(lon, lat) {
@@ -245,8 +242,7 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     }
   }
 
-  // šírka koryta pre línie (metre) – Váh \~30–50 m, berieme polomer
-  const LINE_HALF_WIDTH = 35;
+  const LINE_HALF_WIDTH = 28;
 
   function isWater(lon, lat, x, y) {
     for (const ring of polygons) {
@@ -261,13 +257,63 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     return false;
   }
 
-  return { isWater, polyCount: polygons.length, lineCount: linesM.length };
+  /** Najbližší bod na stredovej línii koryta (metre) */
+  function nearestCenterline(x, y) {
+    let best = null;
+    let bestD = Infinity;
+    for (const line of linesM) {
+      for (let i = 0; i < line.length - 1; i++) {
+        const ax = line[i].x, ay = line[i].y;
+        const bx = line[i + 1].x, by = line[i + 1].y;
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 < 1e-12 ? 0 : ((x - ax) * dx + (y - ay) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        const px = ax + t * dx;
+        const py = ay + t * dy;
+        const d = Math.hypot(x - px, y - py);
+        if (d < bestD) {
+          bestD = d;
+          best = { x: px, y: py, d };
+        }
+      }
+    }
+    return best;
+  }
+
+  return {
+    isWater,
+    nearestCenterline,
+    hasLines: linesM.length > 0,
+    polyCount: polygons.length,
+    lineCount: linesM.length
+  };
 }
 
-/**
- * Heightmap: IDW z vrstevníc, potom bunky vo vode
- * → dno koryta (nižšia výška) + flag water
- */
+function sampleGrid(heights, cols, rows, minX, maxX, minY, maxY, x, y) {
+  const u = (x - minX) / Math.max(maxX - minX, 1e-6);
+  const v = (y - minY) / Math.max(maxY - minY, 1e-6);
+  if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+  const fx = u * (cols - 1);
+  const fy = v * (rows - 1);
+  const i0 = Math.floor(fx);
+  const j0 = Math.floor(fy);
+  const i1 = Math.min(i0 + 1, cols - 1);
+  const j1 = Math.min(j0 + 1, rows - 1);
+  const tx = fx - i0;
+  const ty = fy - j0;
+  const h00 = heights[j0 * cols + i0];
+  const h10 = heights[j0 * cols + i1];
+  const h01 = heights[j1 * cols + i0];
+  const h11 = heights[j1 * cols + i1];
+  return (
+    h00 * (1 - tx) * (1 - ty) +
+    h10 * tx * (1 - ty) +
+    h01 * (1 - tx) * ty +
+    h11 * tx * ty
+  );
+}
+
 function buildHeightmapWithRiver(
   samples,
   boundsXY,
@@ -307,7 +353,7 @@ function buildHeightmapWithRiver(
     return out.length ? out : samples;
   }
 
-  // 1) IDW všade
+  // 1) IDW
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
@@ -332,29 +378,88 @@ function buildHeightmapWithRiver(
     }
   }
 
-  // 2) voda: označ + prehĺb koryto
-  // dno = lokálne nižšie o CHANNEL_DEPTH, aspoň o niečo pod okolím
-  const CHANNEL_DEPTH = 4; // metre
-  let waterCells = 0;
-  let hMin = Infinity;
-  let hMax = -Infinity;
-
+  // 2) maska vody
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
       const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
       const [lon, lat] = unproject(x, y);
+      if (waterIndex.isWater(lon, lat, x, y)) water[j * cols + i] = 1;
+    }
+  }
 
-      if (waterIndex.isWater(lon, lat, x, y)) {
-        water[j * cols + i] = 1;
-        heights[j * cols + i] -= CHANNEL_DEPTH;
-        waterCells++;
+  // 3) výška vody = výška na strede koryta (nie svah), jemne nižšie dno
+  const BED_BELOW = 1.5;
+  const idwCopy = new Float32Array(heights);
+
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      if (!water[j * cols + i]) continue;
+
+      const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
+      const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
+
+      let surface = null;
+
+      // prioritne: výška na najbližšom bode stredovej čiary Váhu
+      if (waterIndex.hasLines) {
+        const c = waterIndex.nearestCenterline(x, y);
+        if (c) {
+          surface = sampleGrid(idwCopy, cols, rows, minX, maxX, minY, maxY, c.x, c.y);
+        }
       }
 
-      const h = heights[j * cols + i];
-      if (h < hMin) hMin = h;
-      if (h > hMax) hMax = h;
+      // fallback: minimum IDW v okolí medzi vodnými bunkami (hladina v „miske“)
+      if (surface == null) {
+        let minH = idwCopy[j * cols + i];
+        const R = 4;
+        for (let dj = -R; dj <= R; dj++) {
+          for (let di = -R; di <= R; di++) {
+            const ii = i + di;
+            const jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= cols || jj >= rows) continue;
+            if (!water[jj * cols + ii]) continue;
+            const h = idwCopy[jj * cols + ii];
+            if (h < minH) minH = h;
+          }
+        }
+        surface = minH;
+      }
+
+      heights[j * cols + i] = surface - BED_BELOW;
     }
+  }
+
+  // 4) vyhladenie vodnej hladiny (2 prechody minima v susedstve vody)
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Float32Array(heights);
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        if (!water[j * cols + i]) continue;
+        let minH = heights[j * cols + i];
+        for (let dj = -1; dj <= 1; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            const ii = i + di;
+            const jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= cols || jj >= rows) continue;
+            if (!water[jj * cols + ii]) continue;
+            const h = heights[jj * cols + ii];
+            if (h < minH) minH = h;
+          }
+        }
+        next[j * cols + i] = minH;
+      }
+    }
+    heights.set(next);
+  }
+
+  let waterCells = 0;
+  let hMin = Infinity;
+  let hMax = -Infinity;
+  for (let n = 0; n < heights.length; n++) {
+    if (water[n]) waterCells++;
+    if (heights[n] < hMin) hMin = heights[n];
+    if (heights[n] > hMax) hMax = heights[n];
   }
 
   return {
@@ -475,7 +580,6 @@ let terrainMesh = null;
 let zMinGlobal = 0;
 let unprojectFn = null;
 let statusBase = "";
-let waterMaskRef = null;
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -503,9 +607,8 @@ function onPointerDown(event) {
     lonLat = ` | lon ${lon.toFixed(5)}, lat ${lat.toFixed(5)}`;
   }
 
-  // hrubá detekcia vody z masky
   let waterTxt = "";
-  if (waterMaskRef && window.__heightmap) {
+  if (window.__heightmap) {
     const hm = window.__heightmap;
     const u = (p.x - hm.minX) / Math.max(hm.maxX - hm.minX, 1e-6);
     const v = (p.z - hm.minY) / Math.max(hm.maxY - hm.minY, 1e-6);
@@ -562,7 +665,7 @@ async function init() {
     const coreLines = buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.4);
     scene.add(coreLines.group);
 
-    info.textContent = "Heightmap s riekou...";
+    info.textContent = "Heightmap: koryto podla stredu rieky...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
@@ -589,7 +692,6 @@ async function init() {
     }
 
     const waterIndex = buildWaterIndex(riverFeatures, project, coreBounds);
-    waterMaskRef = waterIndex;
 
     await new Promise((r) => setTimeout(r, 30));
 
@@ -627,8 +729,7 @@ async function init() {
 
     statusBase =
       "Mesh " + cols + "x" + rows +
-      " | voda buniek " + heightmap.waterCells +
-      " | P" + waterIndex.polyCount + "/L" + waterIndex.lineCount +
+      " | voda " + heightmap.waterCells +
       " | klikni CORE";
     info.textContent = statusBase;
   } catch (err) {
