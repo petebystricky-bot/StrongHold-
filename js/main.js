@@ -28,9 +28,10 @@ const COLOR_LOW = new THREE.Color("#2d6a3e");
 const COLOR_HIGH = new THREE.Color("#8b6914");
 const COLOR_WATER = new THREE.Color("#1a6a9a");
 
-// max spád hladiny: 0.5 m na 1 km (veľmi jemné)
+// max spád hladiny: 0.5 m na 1 km
 const MAX_SLOPE = 0.0005;
 const LINE_HALF_WIDTH = 28;
+const MAX_CHANNEL_DEPTH = 3; // metre – max hĺbka voči lokálnemu terénu
 
 function colorByElevation(elev, minZ, maxZ) {
   const t = maxZ === minZ ? 0.5 : (elev - minZ) / (maxZ - minZ);
@@ -246,7 +247,6 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     }
   }
 
-  // hlavná os = najdlhšia línia v CORE (typicky Váh)
   let mainLine = null;
   let mainLen = -1;
   for (const line of linesM) {
@@ -260,7 +260,6 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     }
   }
 
-  /** Profile pozdĺž hlavnej osi: body s kumulatívnou vzdialenosťou s */
   function buildStationPolyline() {
     if (!mainLine || mainLine.length < 2) return [];
     const stations = [];
@@ -289,7 +288,6 @@ function buildWaterIndex(riverFeatures, project, coreBounds) {
     return false;
   }
 
-  /** Najbližší bod na hlavnej osi + staničenie s */
   function nearestOnMain(x, y) {
     if (!mainLine || mainLine.length < 2) return null;
     let bestD = Infinity;
@@ -345,12 +343,6 @@ function sampleGrid(heights, cols, rows, minX, maxX, minY, maxY, x, y) {
   );
 }
 
-/**
- * Profil hladiny pozdĺž toku:
- * - vzorky IDW na osi
- * - vyhladenie
- * - monotónny jemný spád (neide do kopca po toku)
- */
 function buildWaterProfile(stations, idwHeights, cols, rows, boundsXY) {
   const { minX, maxX, minY, maxY } = boundsXY;
   if (!stations.length) return null;
@@ -360,7 +352,6 @@ function buildWaterProfile(stations, idwHeights, cols, rows, boundsXY) {
     return { s: st.s, h: h == null ? 0 : h };
   });
 
-  // kĺzavý priemer
   const win = 3;
   const smooth = raw.map((p, i) => {
     let sum = 0, n = 0;
@@ -372,7 +363,6 @@ function buildWaterProfile(stations, idwHeights, cols, rows, boundsXY) {
     return { s: p.s, h: sum / n };
   });
 
-  // smer toku: nech hladina celkovo klesá (ak IDW rastie, otočíme staničenie)
   const first = smooth[0].h;
   const last = smooth[smooth.length - 1].h;
   if (last > first + 0.5) {
@@ -382,15 +372,12 @@ function buildWaterProfile(stations, idwHeights, cols, rows, boundsXY) {
     smooth.sort((a, b) => a.s - b.s);
   }
 
-  // monotónny spád + limit MAX_SLOPE
   const profile = [{ s: smooth[0].s, h: smooth[0].h }];
   for (let i = 1; i < smooth.length; i++) {
     const ds = Math.max(smooth[i].s - profile[i - 1].s, 1e-3);
     const maxDrop = MAX_SLOPE * ds;
-    // nesmie stúpať; klesanie max MAX_SLOPE
     let h = Math.min(smooth[i].h, profile[i - 1].h);
     h = Math.max(h, profile[i - 1].h - Math.max(maxDrop, 0.0001));
-    // ak by chcela stúpať viac, pridrž predchádzajúcu (vodováha)
     if (smooth[i].h > profile[i - 1].h) h = profile[i - 1].h - maxDrop * 0.25;
     profile.push({ s: smooth[i].s, h });
   }
@@ -487,7 +474,6 @@ function buildHeightmapWithRiver(
   const stations = waterIndex.buildStationPolyline();
   const waterProfile = buildWaterProfile(stations, idwCopy, cols, rows, boundsXY);
 
-  // fallback: jedna plochá hladina = median
   let flatLevel = null;
   if (!waterProfile) {
     const vals = [];
@@ -496,20 +482,32 @@ function buildHeightmapWithRiver(
     flatLevel = vals.length ? vals[Math.floor(vals.length / 2)] : 0;
   }
 
-  // 4) vodné bunky = hladina podľa staničenia na osi (priečne rovnaká)
+  // 4) vodné bunky = hladina + max hĺbka voči lokálnemu terénu
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       if (!water[j * cols + i]) continue;
+
       const x = minX + (i / Math.max(cols - 1, 1)) * (maxX - minX);
       const y = minY + (j / Math.max(rows - 1, 1)) * (maxY - minY);
+      const terrainH = idwCopy[j * cols + i];
 
+      let surface;
       if (waterProfile) {
         const n = waterIndex.nearestOnMain(x, y);
-        if (n) heights[j * cols + i] = waterProfile.heightAtS(n.s);
-        else heights[j * cols + i] = waterProfile.heightAtS(0);
+        surface = waterProfile.heightAtS(n ? n.s : 0);
       } else {
-        heights[j * cols + i] = flatLevel;
+        surface = flatLevel;
       }
+
+      let h = surface;
+      // max hĺbka koryta – žiadna priepasť
+      if (terrainH - h > MAX_CHANNEL_DEPTH) {
+        h = terrainH - MAX_CHANNEL_DEPTH;
+      }
+      // voda nesmie byť vyššie než terén
+      if (h > terrainH) h = terrainH - 0.5;
+
+      heights[j * cols + i] = h;
     }
   }
 
@@ -711,7 +709,7 @@ async function init() {
     scene.add(buildLineLayer(midFeatures, project, zMin, zMax, colorMid, 0.4).group);
     scene.add(buildLineLayer(coreFeatures, project, zMin, zMax, colorCoreLine, 0.4).group);
 
-    info.textContent = "Heightmap + vodna hladina so spadom...";
+    info.textContent = "Heightmap + vodna hladina...";
     const samples = collectSamples(coreFeatures, project, 3);
 
     const [x0, y0] = project(coreBounds.minLon, coreBounds.minLat);
